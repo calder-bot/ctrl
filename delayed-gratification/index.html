@@ -62,7 +62,6 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 10px;
   }
 
   #gratification-slider {
@@ -98,20 +97,7 @@
     box-shadow: 0 0 8px rgba(255, 107, 138, 0.4);
   }
 
-  #slider-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: #ff6b8a;
-    min-width: 48px;
-    text-align: right;
-    flex-shrink: 0;
-  }
 
-  #button-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
 
   button {
     width: 44px;
@@ -154,7 +140,6 @@
     }
     #top-bar .title { font-size: 10px; }
     #controls { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)); }
-    #slider-value { font-size: 15px; min-width: 40px; }
   }
 </style>
 </head>
@@ -171,11 +156,8 @@
 
 <div id="controls">
   <div id="slider-row">
-    <input type="range" id="gratification-slider" min="0" max="100" value="50">
-    <div id="slider-value">50%</div>
-  </div>
-  <div id="button-row">
     <button id="btn-action">&#9654;</button>
+    <input type="range" id="gratification-slider" min="0" max="100" value="50">
   </div>
 </div>
 
@@ -183,7 +165,6 @@
 var canvas = document.getElementById('canvas');
 var ctx = canvas.getContext('2d');
 var slider = document.getElementById('gratification-slider');
-var sliderValue = document.getElementById('slider-value');
 var btnAction = document.getElementById('btn-action');
 var btnClear = document.getElementById('btn-clear');
 
@@ -580,7 +561,6 @@ function startRun() {
   capital = 20;
   gratification = parseInt(slider.value);
   gratFiltered = gratification;
-  sliderValue.textContent = gratification + '%';
   cumulativeScore = 0;
   life = {
     epochs: [], gratification: [], capital: [],
@@ -601,7 +581,6 @@ function clearAll() {
   capital = 20;
   gratification = parseInt(slider.value);
   gratFiltered = gratification;
-  sliderValue.textContent = gratification + '%';
   cumulativeScore = 0;
   life = {
     epochs: [], gratification: [], capital: [],
@@ -616,7 +595,6 @@ function clearAll() {
 // --- Events ---
 slider.addEventListener('input', function(e) {
   gratification = parseInt(e.target.value);
-  sliderValue.textContent = gratification + '%';
   if (simState !== STATE_RUNNING) {
     updateDisplays();
     draw();
@@ -625,7 +603,6 @@ slider.addEventListener('input', function(e) {
 
 slider.addEventListener('change', function(e) {
   gratification = parseInt(e.target.value);
-  sliderValue.textContent = gratification + '%';
 });
 
 btnAction.addEventListener('click', function() {
