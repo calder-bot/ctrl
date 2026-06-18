@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Delayed Gratification</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    color: #ccc;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  #top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #222;
+  }
+
+  #top-bar .title {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  #top-bar .stats {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+  }
+
+  .stat-label { color: #555; }
+  .stat-value { color: #ccc; font-weight: 600; }
+  .stat-value.score { color: #ff6b8a; }
+
+  #canvas-container {
+    flex: 1;
+    position: relative;
+    min-height: 100px;
+    overflow: hidden;
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  #controls {
+    padding: 14px 16px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom, 14px));
+    flex-shrink: 0;
+    border-top: 1px solid #222;
+  }
+
+  #slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  #slider-label {
+    font-size: 11px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+  }
+
+  #gratification-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    background: #222;
+    border-radius: 4px;
+    outline: none;
+    touch-action: pan-x;
+  }
+
+  #gratification-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ff6b8a;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(255, 107, 138, 0.4);
+  }
+
+  #gratification-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ff6b8a;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(255, 107, 138, 0.4);
+  }
+
+  #slider-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #ff6b8a;
+    min-width: 48px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  #button-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    padding: 10px 18px;
+    border: 1px solid #333;
+    background: #111;
+    color: #ccc;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:hover { background: #1a1a1a; border-color: #444; }
+  button:active { background: #222; }
+  button.primary { border-color: #ff6b8a; color: #ff6b8a; }
+  button.primary:hover { background: #1a0a0f; }
+
+  #lives-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: #444;
+    align-self: center;
+  }
+
+  @media (max-width: 600px) {
+    #top-bar {
+      padding: 8px 12px;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    #top-bar .title { font-size: 10px; width: 100%; }
+    #top-bar .stats { gap: 10px; font-size: 10px; }
+    #controls { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)); }
+    #slider-label { font-size: 9px; }
+    #slider-value { font-size: 15px; min-width: 40px; }
+    button { padding: 8px 14px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <div class="title">Delayed Gratification</div>
+  <div class="stats">
+    <div><span class="stat-label">Age </span><span class="stat-value" id="age-display">0</span></div>
+    <div><span class="stat-label">Wellness </span><span class="stat-value" id="wellness-display">50</span></div>
+    <div><span class="stat-label">Capital </span><span class="stat-value" id="capital-display">50</span></div>
+    <div><span class="stat-label">Score </span><span class="stat-value score" id="score-display">0</span></div>
+  </div>
+</div>
+
+<div id="canvas-container">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="controls">
+  <div id="slider-row">
+    <div id="slider-label">Gratification</div>
+    <input type="range" id="gratification-slider" min="0" max="100" value="50">
+    <div id="slider-value">50%</div>
+  </div>
+  <div id="button-row">
+    <button class="primary" id="btn-play">Play</button>
+    <button id="btn-reset">New Life</button>
+    <button id="btn-clear">Clear All</button>
+    <div id="lives-count"></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const slider = document.getElementById('gratification-slider');
+const sliderValue = document.getElementById('slider-value');
+const ageDisplay = document.getElementById('age-display');
+const wellnessDisplay = document.getElementById('wellness-display');
+const capitalDisplay = document.getElementById('capital-display');
+const scoreDisplay = document.getElementById('score-display');
+const btnPlay = document.getElementById('btn-play');
+const btnReset = document.getElementById('btn-reset');
+const btnClear = document.getElementById('btn-clear');
+const livesCount = document.getElementById('lives-count');
+
+// --- Simulation parameters ---
+const MAX_AGE = 100;
+const DT = 0.05; // years per tick
+const SPEED = 1; // ticks per frame (~0.05 years per frame at 60fps, ~33 sec for full life)
+
+// --- State ---
+let playing = false;
+let age = 0;
+let gratification = 50;
+let capital = 50;
+
+// History for current life
+let life = {
+  ages: [],
+  gratification: [],
+  capital: [],
+  upperBand: [],
+  lowerBand: [],
+  wellness: [],
+  score: []
+};
+
+let cumulativeScore = 0;
+let pastLives = [];
+
+// --- Life Capital Model ---
+function naturalCapitalRate(age, grat) {
+  const peakAge = 25 + (1 - grat / 100) * 35;
+  const width = 25 + (1 - grat / 100) * 10;
+  const amplitude = 0.8 + (1 - grat / 100) * 0.6;
+  const x = (age - peakAge) / width;
+  return amplitude * (-2 * x) * Math.exp(-x * x);
+}
+
+function investmentFlow(grat) {
+  return 0.5 * (1 - grat / 50);
+}
+
+function updateCapital(age, grat, capital, dt) {
+  const natRate = naturalCapitalRate(age, grat);
+  const invFlow = investmentFlow(grat);
+  let newCapital = capital + (natRate + invFlow) * dt;
+  return Math.max(5, Math.min(100, newCapital));
+}
+
+function getBands(capital) {
+  const bandWidth = 10 + capital * 0.4;
+  const center = capital;
+  const upper = Math.min(100, center + bandWidth / 2);
+  const lower = Math.max(0, center - bandWidth / 2);
+  return { upper, lower };
+}
+
+function getWellness(grat, upper, lower) {
+  return lower + (grat / 100) * (upper - lower);
+}
+
+// --- Canvas setup ---
+function resizeCanvas() {
+  const container = document.getElementById('canvas-container');
+  const rect = container.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+window.addEventListener('resize', resizeCanvas);
+// Delay initial sizing to let layout settle
+setTimeout(resizeCanvas, 50);
+
+// --- Drawing ---
+const COLORS = {
+  bg: '#000000',
+  grid: '#111111',
+  gridText: '#333333',
+  upperBand: '#3a3a5c',
+  lowerBand: '#3a3a5c',
+  bandFill: 'rgba(58, 58, 92, 0.15)',
+  wellness: '#ff4466',
+  wellnessArea: 'rgba(255, 68, 102, 0.12)',
+  gratTrace: '#ff6b8a',
+  pastLife: [
+    'rgba(100, 140, 255, 0.35)',
+    'rgba(100, 255, 140, 0.35)',
+    'rgba(255, 200, 100, 0.35)',
+    'rgba(200, 100, 255, 0.35)',
+    'rgba(100, 255, 255, 0.35)',
+    'rgba(255, 150, 180, 0.35)',
+  ],
+  pastLifeArea: [
+    'rgba(100, 140, 255, 0.08)',
+    'rgba(100, 255, 140, 0.08)',
+    'rgba(255, 200, 100, 0.08)',
+    'rgba(200, 100, 255, 0.08)',
+    'rgba(100, 255, 255, 0.08)',
+    'rgba(255, 150, 180, 0.08)',
+  ],
+};
+
+function getPlotArea() {
+  const w = canvas.width / (window.devicePixelRatio || 1);
+  const h = canvas.height / (window.devicePixelRatio || 1);
+  return {
+    left: 36,
+    right: w - 12,
+    top: 12,
+    bottom: h - 22,
+    width: w - 48,
+    height: h - 34
+  };
+}
+
+function ageToX(a, plot) {
+  return plot.left + (a / MAX_AGE) * plot.width;
+}
+
+function valToY(v, plot) {
+  return plot.bottom - (v / 100) * plot.height;
+}
+
+function drawGrid(plot) {
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = COLORS.gridText;
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+
+  for (let v = 0; v <= 100; v += 25) {
+    const y = valToY(v, plot);
+    ctx.beginPath();
+    ctx.moveTo(plot.left, y);
+    ctx.lineTo(plot.right, y);
+    ctx.stroke();
+    ctx.fillText(v.toString(), plot.left - 4, y + 3);
+  }
+
+  ctx.textAlign = 'center';
+  for (let a = 0; a <= MAX_AGE; a += 20) {
+    const x = ageToX(a, plot);
+    ctx.beginPath();
+    ctx.moveTo(x, plot.top);
+    ctx.lineTo(x, plot.bottom);
+    ctx.stroke();
+    ctx.fillText(a.toString(), x, plot.bottom + 14);
+  }
+}
+
+function drawLifePath(life, plot, color, areaColor, lineWidth) {
+  if (life.ages.length < 2) return;
+
+  ctx.beginPath();
+  ctx.moveTo(ageToX(life.ages[0], plot), valToY(0, plot));
+  for (let i = 0; i < life.ages.length; i++) {
+    ctx.lineTo(ageToX(life.ages[i], plot), valToY(life.wellness[i], plot));
+  }
+  ctx.lineTo(ageToX(life.ages[life.ages.length - 1], plot), valToY(0, plot));
+  ctx.closePath();
+  ctx.fillStyle = areaColor;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.wellness[i], plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawCurrentLife(plot) {
+  if (life.ages.length < 2) return;
+
+  // Band fill
+  ctx.beginPath();
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.upperBand[i], plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  for (let i = life.ages.length - 1; i >= 0; i--) {
+    ctx.lineTo(ageToX(life.ages[i], plot), valToY(life.lowerBand[i], plot));
+  }
+  ctx.closePath();
+  ctx.fillStyle = COLORS.bandFill;
+  ctx.fill();
+
+  // Upper band
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.upperBand;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.upperBand[i], plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Lower band
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.lowerBand;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.lowerBand[i], plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Wellness area
+  ctx.beginPath();
+  ctx.moveTo(ageToX(life.ages[0], plot), valToY(0, plot));
+  for (let i = 0; i < life.ages.length; i++) {
+    ctx.lineTo(ageToX(life.ages[i], plot), valToY(life.wellness[i], plot));
+  }
+  ctx.lineTo(ageToX(life.ages[life.ages.length - 1], plot), valToY(0, plot));
+  ctx.closePath();
+  ctx.fillStyle = COLORS.wellnessArea;
+  ctx.fill();
+
+  // Wellness line
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.wellness;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.wellness[i], plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Gratification trace (dashed, scaled to bottom 30%)
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.gratTrace;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  for (let i = 0; i < life.ages.length; i++) {
+    const x = ageToX(life.ages[i], plot);
+    const y = valToY(life.gratification[i] * 0.3, plot);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Current position dot
+  if (age < MAX_AGE && life.ages.length > 0) {
+    const lastIdx = life.ages.length - 1;
+    const cx = ageToX(life.ages[lastIdx], plot);
+    const cy = valToY(life.wellness[lastIdx], plot);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 68, 102, 0.3)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS.wellness;
+    ctx.fill();
+  }
+}
+
+function drawScores(plot) {
+  if (pastLives.length === 0 && life.ages.length === 0) return;
+
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  let y = plot.top + 16;
+
+  for (let i = 0; i < pastLives.length; i++) {
+    const life = pastLives[i];
+    const colorIdx = i % COLORS.pastLife.length;
+    ctx.fillStyle = COLORS.pastLife[colorIdx].replace('0.35', '0.7');
+    const score = life.score[life.score.length - 1] || 0;
+    ctx.fillText('Life ' + (i + 1) + ': ' + Math.round(score), plot.right - 4, y);
+    y += 16;
+  }
+
+  if (life.ages.length > 0) {
+    ctx.fillStyle = COLORS.wellness;
+    ctx.fillText('Current: ' + Math.round(cumulativeScore), plot.right - 4, y);
+  }
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const plot = getPlotArea();
+  drawGrid(plot);
+
+  for (let i = 0; i < pastLives.length; i++) {
+    const colorIdx = i % COLORS.pastLife.length;
+    drawLifePath(pastLives[i], plot, COLORS.pastLife[colorIdx], COLORS.pastLifeArea[colorIdx], 1.5);
+  }
+
+  drawCurrentLife(plot);
+  drawScores(plot);
+}
+
+// --- Simulation ---
+function recordState() {
+  const bands = getBands(capital);
+  const wellness = getWellness(gratification, bands.upper, bands.lower);
+
+  life.ages.push(age);
+  life.gratification.push(gratification);
+  life.capital.push(capital);
+  life.upperBand.push(bands.upper);
+  life.lowerBand.push(bands.lower);
+  life.wellness.push(wellness);
+  life.score.push(cumulativeScore);
+}
+
+function tick() {
+  if (!playing) return;
+
+  for (let i = 0; i < SPEED; i++) {
+    if (age >= MAX_AGE) {
+      finishLife();
+      return;
+    }
+
+    capital = updateCapital(age, gratification, capital, DT);
+    const bands = getBands(capital);
+    const wellness = getWellness(gratification, bands.upper, bands.lower);
+    cumulativeScore += wellness * DT;
+    age += DT;
+
+    if (life.ages.length === 0 || age - life.ages[life.ages.length - 1] >= 0.4) {
+      recordState();
+    }
+  }
+
+  updateDisplays();
+  draw();
+  requestAnimationFrame(tick);
+}
+
+function updateDisplays() {
+  const bands = getBands(capital);
+  const wellness = getWellness(gratification, bands.upper, bands.lower);
+
+  ageDisplay.textContent = Math.min(Math.floor(age), MAX_AGE);
+  wellnessDisplay.textContent = Math.round(wellness);
+  capitalDisplay.textContent = Math.round(capital);
+  scoreDisplay.textContent = Math.round(cumulativeScore);
+}
+
+function finishLife() {
+  playing = false;
+  age = MAX_AGE;
+  recordState();
+  updateDisplays();
+  draw();
+  btnPlay.textContent = 'Done';
+  btnPlay.disabled = true;
+  pastLives.push(JSON.parse(JSON.stringify(life)));
+  updateLivesCount();
+}
+
+function resetLife() {
+  playing = false;
+  age = 0;
+  capital = 50;
+  gratification = 50;
+  cumulativeScore = 0;
+  slider.value = 50;
+  sliderValue.textContent = '50%';
+  life = {
+    ages: [], gratification: [], capital: [],
+    upperBand: [], lowerBand: [], wellness: [], score: []
+  };
+  recordState();
+  btnPlay.textContent = 'Play';
+  btnPlay.disabled = false;
+  updateDisplays();
+  draw();
+}
+
+function clearAll() {
+  pastLives = [];
+  updateLivesCount();
+  resetLife();
+}
+
+function updateLivesCount() {
+  livesCount.textContent = pastLives.length > 0
+    ? pastLives.length + ' past ' + (pastLives.length === 1 ? 'life' : 'lives')
+    : '';
+}
+
+// --- Events ---
+slider.addEventListener('input', function(e) {
+  gratification = parseInt(e.target.value);
+  sliderValue.textContent = gratification + '%';
+  if (!playing) {
+    updateDisplays();
+    draw();
+  }
+});
+
+// Also listen for change event (some mobile browsers)
+slider.addEventListener('change', function(e) {
+  gratification = parseInt(e.target.value);
+  sliderValue.textContent = gratification + '%';
+});
+
+btnPlay.addEventListener('click', function() {
+  if (age >= MAX_AGE) return;
+  playing = !playing;
+  btnPlay.textContent = playing ? 'Pause' : 'Play';
+  if (playing) requestAnimationFrame(tick);
+});
+
+btnReset.addEventListener('click', resetLife);
+btnClear.addEventListener('click', clearAll);
+
+// Also support touch events on buttons for mobile
+[btnPlay, btnReset, btnClear].forEach(function(btn) {
+  btn.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    btn.click();
+  });
+});
+
+// --- Init ---
+recordState();
+updateDisplays();
+</script>
+</body>
+</html>
