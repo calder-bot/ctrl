@@ -595,12 +595,12 @@ function resetLife() {
   age = 0;
   capital = 20;
   gratification = parseInt(slider.value);
+  sliderValue.textContent = gratification + '%';
   cumulativeScore = 0;
   life = {
     ages: [], gratification: [], capital: [],
     upperBand: [], lowerBand: [], wellness: [], score: []
   };
-  recordState();
   btnPlay.textContent = 'Play';
   btnPlay.disabled = false;
   updateDisplays();
@@ -639,7 +639,14 @@ btnPlay.addEventListener('click', function() {
   if (age >= MAX_AGE) return;
   playing = !playing;
   btnPlay.textContent = playing ? 'Pause' : 'Play';
-  if (playing) requestAnimationFrame(tick);
+  if (playing) {
+    // Read current slider value and record initial state if this is a fresh start
+    gratification = parseInt(slider.value);
+    if (life.ages.length === 0) {
+      recordState();
+    }
+    requestAnimationFrame(tick);
+  }
 });
 
 btnReset.addEventListener('click', resetLife);
@@ -654,8 +661,8 @@ btnClear.addEventListener('click', clearAll);
 });
 
 // --- Init ---
-recordState();
 updateDisplays();
+draw();
 </script>
 </body>
 </html>
