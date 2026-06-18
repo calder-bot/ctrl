@@ -36,15 +36,6 @@
     text-transform: uppercase;
   }
 
-  #top-bar .stats {
-    display: flex;
-    gap: 16px;
-    font-size: 12px;
-  }
-
-  .stat-label { color: #555; }
-  .stat-value { color: #ccc; font-weight: 600; }
-  .stat-value.score { color: #ff6b8a; }
 
   #canvas-container {
     flex: 1;
@@ -162,7 +153,6 @@
       gap: 4px;
     }
     #top-bar .title { font-size: 10px; width: 100%; }
-    #top-bar .stats { gap: 10px; font-size: 10px; }
     #controls { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)); }
     #slider-value { font-size: 15px; min-width: 40px; }
   }
@@ -172,11 +162,7 @@
 
 <div id="top-bar">
   <div class="title">Delayed Gratification</div>
-  <div class="stats">
-    <div><span class="stat-value" id="epoch-display">0</span><span class="stat-label">%</span></div>
-    <div><span class="stat-label"></span><span class="stat-value score" id="score-display">0</span></div>
-    <button id="btn-clear">&empty;</button>
-  </div>
+  <button id="btn-clear">&empty;</button>
 </div>
 
 <div id="canvas-container">
@@ -198,8 +184,6 @@ var canvas = document.getElementById('canvas');
 var ctx = canvas.getContext('2d');
 var slider = document.getElementById('gratification-slider');
 var sliderValue = document.getElementById('slider-value');
-var epochDisplay = document.getElementById('epoch-display');
-var scoreDisplay = document.getElementById('score-display');
 var btnAction = document.getElementById('btn-action');
 var btnClear = document.getElementById('btn-clear');
 
@@ -559,10 +543,7 @@ function tick() {
 }
 
 function updateDisplays() {
-  var bands = getBands(capital);
-  var wellness = getWellness(gratFiltered, bands.upper, bands.lower);
-  epochDisplay.textContent = Math.min(Math.floor(epoch), MAX_EPOCH);
-  scoreDisplay.textContent = Math.round(cumulativeScore);
+  // Stats removed — score legends on the chart are sufficient
 }
 
 function finishRun() {
