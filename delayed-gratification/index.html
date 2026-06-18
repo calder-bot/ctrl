@@ -217,8 +217,8 @@ const livesCount = document.getElementById('lives-count');
 
 // --- Simulation parameters ---
 const MAX_AGE = 100;
-const DT = 0.05; // years per tick
-const SPEED = 1; // ticks per frame (~0.05 years per frame at 60fps, ~33 sec for full life)
+const DT = 0.1; // years per tick
+const SPEED = 4; // ticks per frame (~0.4 years per frame at 60fps, ~15 sec for full life)
 
 // --- State ---
 let playing = false;
@@ -594,10 +594,8 @@ function resetLife() {
   playing = false;
   age = 0;
   capital = 50;
-  gratification = 50;
+  gratification = parseInt(slider.value);
   cumulativeScore = 0;
-  slider.value = 50;
-  sliderValue.textContent = '50%';
   life = {
     ages: [], gratification: [], capital: [],
     upperBand: [], lowerBand: [], wellness: [], score: []
