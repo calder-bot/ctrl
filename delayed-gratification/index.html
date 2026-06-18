@@ -223,7 +223,10 @@ function naturalCapitalRate(epoch, grat) {
 }
 
 function investmentFlow(grat) {
-  return 0.5 * (1 - grat / 50);
+  // Bell curve peaking at ~25-30% gratification
+  // 0% = no growth, 25% = max growth, 100% = no growth
+  var g = grat / 100;
+  return 2.5 * g * (1 - g) * (1 - g);
 }
 
 function updateCapital(epoch, grat, capital, dt) {
