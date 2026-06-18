@@ -224,7 +224,7 @@ const SPEED = 4; // ticks per frame (~0.4 years per frame at 60fps, ~15 sec for 
 let playing = false;
 let age = 0;
 let gratification = 50;
-let capital = 50;
+let capital = 20;
 
 // History for current life
 let life = {
@@ -593,7 +593,7 @@ function finishLife() {
 function resetLife() {
   playing = false;
   age = 0;
-  capital = 50;
+  capital = 20;
   gratification = parseInt(slider.value);
   cumulativeScore = 0;
   life = {
