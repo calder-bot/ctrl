@@ -189,8 +189,10 @@ var btnClear = document.getElementById('btn-clear');
 
 // --- Simulation parameters ---
 var MAX_EPOCH = 100;
-var DT = 0.05;
-var SPEED = 2; // ~0.1 epoch/frame at 60fps → ~17 sec per epoch
+var EPOCH_DURATION = 15; // seconds — wall-clock time for one full epoch
+var EPOCH_RATE = MAX_EPOCH / EPOCH_DURATION; // epoch units per second
+var SIM_DT = 0.05; // internal simulation step size (epoch units)
+var LPF_TAU = 1.0; // low-pass filter time constant in seconds
 
 // --- State ---
 var STATE_READY = 0;
@@ -200,9 +202,9 @@ var simState = STATE_READY;
 var epoch = 0;
 var gratification = 50;      // raw slider value
 var gratFiltered = 50;        // low-pass filtered value (drives the model)
-var LPF_ALPHA = 1 - Math.exp(-1 / 60); // 1 second time constant at 60fps
 var capital = 20;
 var cumulativeScore = 0;
+var lastFrameTime = 0;        // for delta-time calculation
 
 var life = {
   epochs: [], gratification: [], capital: [],
@@ -514,23 +516,35 @@ function recordState() {
   life.score.push(cumulativeScore);
 }
 
-function tick() {
+function tick(timestamp) {
   if (simState !== STATE_RUNNING) return;
 
-  // Low-pass filter the gratification slider
-  gratFiltered += LPF_ALPHA * (gratification - gratFiltered);
+  // Calculate real elapsed time since last frame
+  if (lastFrameTime === 0) lastFrameTime = timestamp;
+  var dtSeconds = Math.min((timestamp - lastFrameTime) / 1000, 0.1); // cap at 100ms to prevent jumps
+  lastFrameTime = timestamp;
 
-  for (var i = 0; i < SPEED; i++) {
+  // Low-pass filter — frame-rate independent
+  var lpfAlpha = 1 - Math.exp(-dtSeconds / LPF_TAU);
+  gratFiltered += lpfAlpha * (gratification - gratFiltered);
+
+  // Advance epoch proportional to real time
+  var epochAdvance = EPOCH_RATE * dtSeconds;
+  var epochRemaining = epochAdvance;
+
+  while (epochRemaining > 0) {
+    var step = Math.min(SIM_DT, epochRemaining);
     if (epoch >= MAX_EPOCH) {
       finishRun();
       return;
     }
 
-    capital = updateCapital(epoch, gratFiltered, capital, DT);
+    capital = updateCapital(epoch, gratFiltered, capital, step);
     var bands = getBands(capital);
     var wellness = getWellness(gratFiltered, bands.upper, bands.lower);
-    cumulativeScore += wellness * DT;
-    epoch += DT;
+    cumulativeScore += wellness * step;
+    epoch += step;
+    epochRemaining -= step;
 
     if (life.epochs.length === 0 || epoch - life.epochs[life.epochs.length - 1] >= 0.4) {
       recordState();
@@ -571,6 +585,7 @@ function startRun() {
   };
   recordState();
   simState = STATE_RUNNING;
+  lastFrameTime = 0; // reset so first frame computes fresh delta
   // Switch to reset icon
   btnAction.innerHTML = '&#8634;';
   updateDisplays();
