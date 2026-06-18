@@ -196,8 +196,8 @@ var btnClear = document.getElementById('btn-clear');
 
 // --- Simulation parameters ---
 var MAX_EPOCH = 100;
-var DT = 0.1;
-var SPEED = 4; // ~15 sec per epoch
+var DT = 0.05;
+var SPEED = 2; // ~0.1 epoch/frame at 60fps → ~17 sec per epoch
 
 // --- State ---
 var STATE_READY = 0;
@@ -205,7 +205,9 @@ var STATE_RUNNING = 1;
 var STATE_DONE = 2;
 var simState = STATE_READY;
 var epoch = 0;
-var gratification = 50;
+var gratification = 50;      // raw slider value
+var gratFiltered = 50;        // low-pass filtered value (drives the model)
+var LPF_ALPHA = 1 - Math.exp(-1 / 60); // 1 second time constant at 60fps
 var capital = 20;
 var cumulativeScore = 0;
 
@@ -508,10 +510,10 @@ function draw() {
 // --- Simulation ---
 function recordState() {
   var bands = getBands(capital);
-  var wellness = getWellness(gratification, bands.upper, bands.lower);
+  var wellness = getWellness(gratFiltered, bands.upper, bands.lower);
 
   life.epochs.push(epoch);
-  life.gratification.push(gratification);
+  life.gratification.push(gratFiltered);
   life.capital.push(capital);
   life.upperBand.push(bands.upper);
   life.lowerBand.push(bands.lower);
@@ -522,15 +524,18 @@ function recordState() {
 function tick() {
   if (simState !== STATE_RUNNING) return;
 
+  // Low-pass filter the gratification slider
+  gratFiltered += LPF_ALPHA * (gratification - gratFiltered);
+
   for (var i = 0; i < SPEED; i++) {
     if (epoch >= MAX_EPOCH) {
       finishRun();
       return;
     }
 
-    capital = updateCapital(epoch, gratification, capital, DT);
+    capital = updateCapital(epoch, gratFiltered, capital, DT);
     var bands = getBands(capital);
-    var wellness = getWellness(gratification, bands.upper, bands.lower);
+    var wellness = getWellness(gratFiltered, bands.upper, bands.lower);
     cumulativeScore += wellness * DT;
     epoch += DT;
 
@@ -546,7 +551,7 @@ function tick() {
 
 function updateDisplays() {
   var bands = getBands(capital);
-  var wellness = getWellness(gratification, bands.upper, bands.lower);
+  var wellness = getWellness(gratFiltered, bands.upper, bands.lower);
   epochDisplay.textContent = Math.min(Math.floor(epoch), MAX_EPOCH);
   scoreDisplay.textContent = Math.round(cumulativeScore);
 }
@@ -567,6 +572,7 @@ function startRun() {
   epoch = 0;
   capital = 20;
   gratification = parseInt(slider.value);
+  gratFiltered = gratification;
   sliderValue.textContent = gratification + '%';
   cumulativeScore = 0;
   life = {
@@ -586,6 +592,7 @@ function clearAll() {
   epoch = 0;
   capital = 20;
   gratification = parseInt(slider.value);
+  gratFiltered = gratification;
   sliderValue.textContent = gratification + '%';
   cumulativeScore = 0;
   life = {
