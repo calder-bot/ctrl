@@ -144,7 +144,16 @@
   button:active { background: #222; }
   button#btn-action { border-color: #ff6b8a; color: #ff6b8a; }
   button#btn-action:hover { background: #1a0a0f; }
-  button#btn-clear { font-size: 16px; }
+  button#btn-clear {
+    font-size: 14px;
+    width: 32px;
+    height: 32px;
+    color: #555;
+    border-color: #222;
+    background: transparent;
+    margin-left: 8px;
+  }
+  button#btn-clear:hover { color: #ff6b8a; border-color: #444; }
 
   @media (max-width: 600px) {
     #top-bar {
@@ -166,6 +175,7 @@
   <div class="stats">
     <div><span class="stat-value" id="epoch-display">0</span><span class="stat-label">%</span></div>
     <div><span class="stat-label"></span><span class="stat-value score" id="score-display">0</span></div>
+    <button id="btn-clear">&empty;</button>
   </div>
 </div>
 
@@ -180,7 +190,6 @@
   </div>
   <div id="button-row">
     <button id="btn-action">&#9654;</button>
-    <button id="btn-clear">&#10005;</button>
   </div>
 </div>
 
