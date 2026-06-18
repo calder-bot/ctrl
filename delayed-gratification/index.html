@@ -192,7 +192,7 @@ var MAX_EPOCH = 100;
 var EPOCH_DURATION = 15; // seconds — wall-clock time for one full epoch
 var EPOCH_RATE = MAX_EPOCH / EPOCH_DURATION; // epoch units per second
 var SIM_DT = 0.05; // internal simulation step size (epoch units)
-var LPF_TAU = 1.0; // low-pass filter time constant in seconds
+var LPF_TAU = 0.5; // low-pass filter time constant in seconds
 
 // --- State ---
 var STATE_READY = 0;
