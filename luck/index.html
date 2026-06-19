@@ -313,31 +313,36 @@
   var heatmapData = null;
 
   function buildHeatmap(currentTime) {
-    // Heatmap covers from currentTime to currentTime + LOOKAHEAD
-    // Rendered as HEATMAP_ROWS rows, each row = a time slice
-    // Each row has BINS columns mapped to x [0,1]
-    var cols = Math.min(BINS, 500); // reduce horizontal resolution for speed
+    // Heatmap: row 0 = current time (top, near skill graph), row N = furthest future (bottom)
+    // Future enters from bottom, scrolls upward toward the skill graph
+    var cols = Math.min(BINS, 500);
     if (!heatmapData || heatmapData.width !== cols || heatmapData.height !== HEATMAP_ROWS) {
       heatmapData = ctx.createImageData(cols, HEATMAP_ROWS);
     }
     var data = heatmapData.data;
     for (var row = 0; row < HEATMAP_ROWS; row++) {
-      // row 0 = furthest future (top of heatmap area), row HEATMAP_ROWS-1 = current time (bottom)
-      var t = currentTime + LOOKAHEAD * (1 - row / (HEATMAP_ROWS - 1));
+      // row 0 = now (top), row HEATMAP_ROWS-1 = now + LOOKAHEAD (bottom)
+      var t = currentTime + LOOKAHEAD * (row / (HEATMAP_ROWS - 1));
+      var idx0 = row * cols * 4;
+      // Beyond run duration: black (no distribution)
+      if (t > RUN_DURATION) {
+        for (var col = 0; col < cols; col++) {
+          var idx = idx0 + col * 4;
+          data[idx] = 0; data[idx + 1] = 0; data[idx + 2] = 0; data[idx + 3] = 255;
+        }
+        continue;
+      }
       var mu = eventMean(t);
       var sig = eventSigma(t);
-      // Precompute peak for normalization
-      var peak = 1.0; // gaussPdf at mean = 1.0
       for (var col = 0; col < cols; col++) {
         var x = col / (cols - 1);
         var density = gaussPdf(x, mu, sig);
-        // Map density to blue intensity: 0 = dark bg, 1 = bright blue
-        var brightness = density * 0.7; // cap brightness
-        var idx = (row * cols + col) * 4;
-        data[idx] = Math.floor(brightness * 30);    // R
-        data[idx + 1] = Math.floor(brightness * 60); // G
-        data[idx + 2] = Math.floor(brightness * 200); // B
-        data[idx + 3] = 255; // A
+        var brightness = density * 0.7;
+        var idx = idx0 + col * 4;
+        data[idx] = Math.floor(brightness * 30);
+        data[idx + 1] = Math.floor(brightness * 60);
+        data[idx + 2] = Math.floor(brightness * 200);
+        data[idx + 3] = 255;
       }
     }
     return { data: heatmapData, cols: cols };
