@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Luck</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    color: #ccc;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  #top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #222;
+  }
+  #top-bar .title {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  #top-bar .right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #score {
+    font-size: 14px;
+    color: #ff4444;
+    font-weight: bold;
+    min-width: 30px;
+    text-align: right;
+  }
+  #canvas-container {
+    flex: 1;
+    position: relative;
+    min-height: 100px;
+    overflow: hidden;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+  #controls {
+    padding: 12px 16px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
+    flex-shrink: 0;
+    border-top: 1px solid #222;
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .slider-row:last-child { margin-bottom: 0; }
+  .slider-label {
+    font-size: 10px;
+    color: #555;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    width: 56px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    background: #1a1a1a;
+    border-radius: 3px;
+    outline: none;
+    touch-action: pan-x;
+  }
+  /* Focus slider — green */
+  #focus-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #4dcc77; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(77, 204, 119, 0.3);
+  }
+  #focus-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #4dcc77; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(77, 204, 119, 0.3);
+  }
+  /* Breadth slider — blue */
+  #breadth-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #6b8aff; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(107, 138, 255, 0.3);
+  }
+  #breadth-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #6b8aff; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(107, 138, 255, 0.3);
+  }
+  button {
+    width: 32px; height: 32px;
+    border: 1px solid #222;
+    background: transparent;
+    color: #555;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0; line-height: 1;
+  }
+  button:hover { color: #ff6b8a; border-color: #444; }
+  button:active { background: #222; }
+  #prev-scores {
+    font-size: 10px;
+    color: #663333;
+    text-align: right;
+    min-width: 50px;
+  }
+  @media (max-width: 600px) {
+    #top-bar { padding: 8px 12px; }
+    #top-bar .title { font-size: 10px; }
+    #controls { padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom, 8px)); }
+    .slider-label { font-size: 9px; width: 48px; }
+    .slider-row { gap: 8px; margin-bottom: 5px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <div class="title">Luck</div>
+  <div class="right">
+    <span id="prev-scores"></span>
+    <span id="score">0</span>
+    <button id="btn-play">&#9654;</button>
+    <button id="btn-clear">&#8634;</button>
+  </div>
+</div>
+
+<div id="canvas-container">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="controls">
+  <div class="slider-row">
+    <span class="slider-label">Focus</span>
+    <input type="range" id="focus-slider" min="0" max="100" value="50">
+  </div>
+  <div class="slider-row">
+    <span class="slider-label">Breadth</span>
+    <input type="range" id="breadth-slider" min="0" max="100" value="50">
+  </div>
+</div>
+
+<script>
+(function() {
+  // --- Constants ---
+  var BINS = 1000;
+  var RUN_DURATION = 15.0;
+  var LOOKAHEAD = 5.0;
+  var EVENT_RATE = 2.5; // events per second
+  var DECAY_RATE = 0.25; // per second (tau ~4s)
+  var ADD_RATE = 313; // total area added per second (spread across bins)
+  var MAX_SKILL = 10.0;
+  var SIGMA_MIN = 0.03;
+  var SIGMA_MAX = 0.25;
+  var HEATMAP_ROWS = 200; // resolution of the scrolling heatmap
+
+  // --- DOM ---
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var container = document.getElementById('canvas-container');
+  var focusSlider = document.getElementById('focus-slider');
+  var breadthSlider = document.getElementById('breadth-slider');
+  var scoreEl = document.getElementById('score');
+  var prevScoresEl = document.getElementById('prev-scores');
+  var btnPlay = document.getElementById('btn-play');
+  var btnClear = document.getElementById('btn-clear');
+
+  // --- State ---
+  var skill = new Float32Array(BINS);
+  var running = false;
+  var runTime = 0;
+  var totalScore = 0;
+  var lastTime = 0;
+  var scores = [];
+  var eventSeed = Date.now();
+  var eventRng;
+  var nextEventTime = 0;
+  var eventFlashes = []; // {x, age}
+
+  // --- Seeded RNG (mulberry32) ---
+  function mulberry32(a) {
+    return function() {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  // --- Box-Muller for Gaussian ---
+  function gaussianRandom(rng, mean, sigma) {
+    var u1, u2;
+    do { u1 = rng(); } while (u1 === 0);
+    u2 = rng();
+    var z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return mean + sigma * z;
+  }
+
+  // --- Event distribution polynomials ---
+  function eventMean(t) {
+    var s = t / RUN_DURATION;
+    return 0.3 + 1.8 * s - 5.4 * s * s + 6.0 * s * s * s - 2.0 * s * s * s * s;
+  }
+  function eventSigma(t) {
+    var s = t / RUN_DURATION;
+    return 0.08 + 0.12 * s - 0.3 * s * s + 0.25 * s * s * s;
+  }
+
+  // --- Gaussian PDF (unnormalized) ---
+  function gaussPdf(x, mean, sigma) {
+    var d = (x - mean) / sigma;
+    return Math.exp(-0.5 * d * d);
+  }
+
+  // --- Resize ---
+  var W, H, dpr;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = container.clientWidth;
+    H = container.clientHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- Reset ---
+  function reset(newSeed) {
+    skill.fill(0);
+    runTime = 0;
+    totalScore = 0;
+    nextEventTime = 0;
+    eventFlashes = [];
+    if (newSeed) eventSeed = Date.now();
+    eventRng = mulberry32(eventSeed);
+    scoreEl.textContent = '0';
+    running = false;
+    btnPlay.innerHTML = '&#9654;';
+  }
+  reset(true);
+
+  // --- Play/Stop ---
+  btnPlay.addEventListener('click', function() {
+    if (!running) {
+      if (runTime >= RUN_DURATION) {
+        scores.push(totalScore);
+        updatePrevScores();
+        reset(false); // same seed for replay
+      }
+      running = true;
+      lastTime = performance.now();
+      btnPlay.innerHTML = '&#9632;';
+    } else {
+      running = false;
+      btnPlay.innerHTML = '&#9654;';
+    }
+  });
+
+  // --- Clear (new seed) ---
+  btnClear.addEventListener('click', function() {
+    scores = [];
+    updatePrevScores();
+    reset(true);
+  });
+
+  function updatePrevScores() {
+    if (scores.length === 0) {
+      prevScoresEl.textContent = '';
+      return;
+    }
+    prevScoresEl.textContent = scores.slice(-5).join('  ');
+  }
+
+  // --- Precompute heatmap ImageData for performance ---
+  var heatmapData = null;
+
+  function buildHeatmap(currentTime) {
+    // Heatmap covers from currentTime to currentTime + LOOKAHEAD
+    // Rendered as HEATMAP_ROWS rows, each row = a time slice
+    // Each row has BINS columns mapped to x [0,1]
+    var cols = Math.min(BINS, 500); // reduce horizontal resolution for speed
+    if (!heatmapData || heatmapData.width !== cols || heatmapData.height !== HEATMAP_ROWS) {
+      heatmapData = ctx.createImageData(cols, HEATMAP_ROWS);
+    }
+    var data = heatmapData.data;
+    for (var row = 0; row < HEATMAP_ROWS; row++) {
+      // row 0 = furthest future (top of heatmap area), row HEATMAP_ROWS-1 = current time (bottom)
+      var t = currentTime + LOOKAHEAD * (1 - row / (HEATMAP_ROWS - 1));
+      var mu = eventMean(t);
+      var sig = eventSigma(t);
+      // Precompute peak for normalization
+      var peak = 1.0; // gaussPdf at mean = 1.0
+      for (var col = 0; col < cols; col++) {
+        var x = col / (cols - 1);
+        var density = gaussPdf(x, mu, sig);
+        // Map density to blue intensity: 0 = dark bg, 1 = bright blue
+        var brightness = density * 0.7; // cap brightness
+        var idx = (row * cols + col) * 4;
+        data[idx] = Math.floor(brightness * 30);    // R
+        data[idx + 1] = Math.floor(brightness * 60); // G
+        data[idx + 2] = Math.floor(brightness * 200); // B
+        data[idx + 3] = 255; // A
+      }
+    }
+    return { data: heatmapData, cols: cols };
+  }
+
+  // --- Tick ---
+  function tick(dt) {
+    if (!running) return;
+    if (runTime >= RUN_DURATION) {
+      running = false;
+      btnPlay.innerHTML = '&#9654;';
+      scores.push(totalScore);
+      updatePrevScores();
+      return;
+    }
+
+    var focusVal = focusSlider.value / 100; // 0-1: where on domain
+    var breadthVal = breadthSlider.value / 100; // 0=narrow, 1=broad
+    var sigma = SIGMA_MIN + breadthVal * (SIGMA_MAX - SIGMA_MIN);
+
+    // 1. Decay existing skill proportionally
+    var decayFactor = 1 - DECAY_RATE * dt;
+    if (decayFactor < 0) decayFactor = 0;
+    for (var i = 0; i < BINS; i++) {
+      skill[i] *= decayFactor;
+    }
+
+    // 2. Add skill according to Gaussian centered on focus
+    // Total area added per step = ADD_RATE * dt
+    // Distribute according to Gaussian shape
+    var totalAdd = ADD_RATE * dt;
+    // Compute Gaussian weights
+    var weights = new Float32Array(BINS);
+    var weightSum = 0;
+    for (var i = 0; i < BINS; i++) {
+      var x = i / (BINS - 1);
+      weights[i] = gaussPdf(x, focusVal, sigma);
+      weightSum += weights[i];
+    }
+    // Normalize and add
+    if (weightSum > 0) {
+      var scale = totalAdd / weightSum;
+      for (var i = 0; i < BINS; i++) {
+        skill[i] += weights[i] * scale;
+        if (skill[i] > MAX_SKILL) skill[i] = MAX_SKILL;
+      }
+    }
+
+    // 3. Fire events
+    while (nextEventTime <= runTime) {
+      var ex = gaussianRandom(eventRng, eventMean(nextEventTime), eventSigma(nextEventTime));
+      ex = Math.max(0, Math.min(1, ex));
+      var bin = Math.round(ex * (BINS - 1));
+      var points = skill[bin];
+      totalScore += points;
+      scoreEl.textContent = Math.round(totalScore);
+      eventFlashes.push({ x: ex, age: 0 });
+      // Schedule next event
+      nextEventTime += 1.0 / EVENT_RATE;
+    }
+
+    // Age flashes
+    for (var i = eventFlashes.length - 1; i >= 0; i--) {
+      eventFlashes[i].age += dt;
+      if (eventFlashes[i].age > 0.4) eventFlashes.splice(i, 1);
+    }
+
+    runTime += dt;
+  }
+
+  // --- Draw ---
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Layout: top 35% = skill graph, bottom 65% = heatmap
+    var skillH = Math.floor(H * 0.35);
+    var heatH = H - skillH;
+    var graphPad = 4;
+
+    // --- Draw heatmap (bottom section) ---
+    var hm = buildHeatmap(runTime);
+    // Draw the precomputed ImageData scaled to fill heatmap area
+    // Use a temporary canvas for scaling
+    var tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = hm.cols;
+    tmpCanvas.height = HEATMAP_ROWS;
+    var tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.putImageData(hm.data, 0, 0);
+    ctx.drawImage(tmpCanvas, 0, skillH, W, heatH);
+
+    // --- Draw time marker on heatmap ---
+    // Current time is at the bottom of the heatmap
+    // Draw a thin horizontal line at the boundary between heatmap's "now" and skill graph
+    ctx.strokeStyle = 'rgba(100, 100, 100, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, skillH);
+    ctx.lineTo(W, skillH);
+    ctx.stroke();
+
+    // --- Draw skill graph (top section) ---
+    // Fill area under skill curve
+    ctx.beginPath();
+    ctx.moveTo(0, skillH);
+    for (var i = 0; i < BINS; i++) {
+      var x = (i / (BINS - 1)) * W;
+      var y = skillH - (skill[i] / MAX_SKILL) * (skillH - graphPad);
+      if (i === 0) ctx.lineTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W, skillH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(77, 204, 119, 0.25)';
+    ctx.fill();
+
+    // Skill curve line
+    ctx.beginPath();
+    for (var i = 0; i < BINS; i++) {
+      var x = (i / (BINS - 1)) * W;
+      var y = skillH - (skill[i] / MAX_SKILL) * (skillH - graphPad);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = '#4dcc77';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // --- Draw event flashes ---
+    for (var i = 0; i < eventFlashes.length; i++) {
+      var flash = eventFlashes[i];
+      var fx = flash.x * W;
+      var bin = Math.round(flash.x * (BINS - 1));
+      var fh = (skill[bin] / MAX_SKILL) * (skillH - graphPad);
+      var alpha = 1.0 - flash.age / 0.4;
+
+      // Red column on skill graph
+      ctx.fillStyle = 'rgba(255, 68, 68, ' + (alpha * 0.5) + ')';
+      ctx.fillRect(fx - 2, skillH - fh, 4, fh);
+
+      // Red dot at the event position
+      ctx.beginPath();
+      ctx.arc(fx, skillH - fh, 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 68, 68, ' + alpha + ')';
+      ctx.fill();
+    }
+
+    // --- Progress bar ---
+    if (running || runTime > 0) {
+      var prog = Math.min(runTime / RUN_DURATION, 1);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.fillRect(0, H - 2, W * prog, 2);
+    }
+  }
+
+  // --- Animation loop ---
+  function loop(ts) {
+    requestAnimationFrame(loop);
+    var dt = (ts - lastTime) / 1000;
+    lastTime = ts;
+    if (dt > 0.1) dt = 0.1; // cap
+    if (running) tick(dt);
+    draw();
+  }
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
