@@ -302,44 +302,82 @@ function draw() {
   vMin -= vRange * 0.1;
   vMax += vRange * 0.15;
 
-  // Draw potential curve
+  // Depth-to-color mapping: green (bottom/good) → orange (middle) → red (top/bad)
+  function depthColor(v, vMin, vMax, alpha) {
+    var frac = (v - vMin) / (vMax - vMin); // 0 = bottom (good), 1 = top (bad)
+    frac = Math.max(0, Math.min(1, frac));
+    var r, g, b;
+    if (frac < 0.5) {
+      // Green to orange (0 → 0.5)
+      var t = frac / 0.5;
+      r = Math.round(40 + t * 215);   // 40 → 255
+      g = Math.round(200 - t * 60);   // 200 → 140
+      b = Math.round(80 - t * 40);    // 80 → 40
+    } else {
+      // Orange to red (0.5 → 1)
+      var t = (frac - 0.5) / 0.5;
+      r = 255;                          // 255
+      g = Math.round(140 - t * 100);   // 140 → 40
+      b = Math.round(40 - t * 20);     // 40 → 20
+    }
+    if (alpha !== undefined) return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+
+  // Draw potential curve as gradient-colored segments
+  ctx.lineWidth = 2.5;
+  for (var i = 0; i < N; i++) {
+    var sx0 = xToScreen(points[i].x, plot);
+    var sy0 = vToScreen(points[i].v, plot, vMin, vMax);
+    var sx1 = xToScreen(points[i+1].x, plot);
+    var sy1 = vToScreen(points[i+1].v, plot, vMin, vMax);
+    var avgV = (points[i].v + points[i+1].v) / 2;
+    ctx.beginPath();
+    ctx.strokeStyle = depthColor(avgV, vMin, vMax);
+    ctx.moveTo(sx0, sy0);
+    ctx.lineTo(sx1, sy1);
+    ctx.stroke();
+  }
+
+  // Fill below curve with subtle gradient
   ctx.beginPath();
-  ctx.strokeStyle = '#3a3a5c';
-  ctx.lineWidth = 2;
   for (var i = 0; i <= N; i++) {
     var sx = xToScreen(points[i].x, plot);
     var sy = vToScreen(points[i].v, plot, vMin, vMax);
     if (i === 0) ctx.moveTo(sx, sy);
     else ctx.lineTo(sx, sy);
   }
-  ctx.stroke();
-
-  // Fill below curve
   ctx.lineTo(xToScreen(points[N].x, plot), plot.bottom);
   ctx.lineTo(xToScreen(points[0].x, plot), plot.bottom);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(58, 58, 92, 0.1)';
+  var fillGrad = ctx.createLinearGradient(0, plot.top, 0, plot.bottom);
+  fillGrad.addColorStop(0, 'rgba(255, 40, 20, 0.08)');
+  fillGrad.addColorStop(0.5, 'rgba(255, 140, 40, 0.06)');
+  fillGrad.addColorStop(1, 'rgba(40, 200, 80, 0.10)');
+  ctx.fillStyle = fillGrad;
   ctx.fill();
 
-  // Draw ball
+  // Draw ball — color matches its depth
   var ballScreenX = xToScreen(ballX, plot);
   var ballV_val = potential(ballX, s);
   var ballScreenY = vToScreen(ballV_val, plot, vMin, vMax);
   var ballRadius = 10;
+  var ballColor = depthColor(ballV_val, vMin, vMax);
+  var ballGlow = depthColor(ballV_val, vMin, vMax, 0.25);
 
   // Ball glow
   ctx.beginPath();
   ctx.arc(ballScreenX, ballScreenY - ballRadius, ballRadius + 4, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255, 68, 102, 0.2)';
+  ctx.fillStyle = ballGlow;
   ctx.fill();
 
   // Ball
   ctx.beginPath();
   ctx.arc(ballScreenX, ballScreenY - ballRadius, ballRadius, 0, Math.PI * 2);
-  ctx.fillStyle = '#ff4466';
+  ctx.fillStyle = ballColor;
   ctx.fill();
-  ctx.strokeStyle = '#ff6b8a';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
   ctx.stroke();
 }
 
