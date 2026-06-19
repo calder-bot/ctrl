@@ -238,7 +238,7 @@ var MIN_GAIN = 1.0;
 var MAX_GAIN = 500.0;
 var WILL_NOISE_AMP = 3.0;
 var GOAL_TOLERANCE = 0.035;
-var GOAL_HOLD_TIME = 0.4; // seconds near goal to count as reached
+var GOAL_HOLD_TIME = 1.0; // seconds near goal to count as reached
 var GOAL_VEL_THRESHOLD = 0.8;
 
 // --- Low-pass filter state ---
@@ -441,8 +441,9 @@ function tick(timestamp) {
   var refRaw = parseInt(refSlider.value) / 100;           // 0 to 1
   var ambVal = parseInt(ambSlider.value) / 100;           // 0 to 1
   var ctxRaw = parseInt(ctxSlider.value) / 100;           // 0 to 1
-  // Quadratic gain mapping: 70% gives moderate, 100% gives extreme
-  var gain = MIN_GAIN + ambVal * ambVal * (MAX_GAIN - MIN_GAIN);
+  // Exponential gain mapping: gentle until 70%, steep 70%→100%
+  // 0%→1, 50%→22, 70%→77, 90%→268, 100%→500
+  var gain = MIN_GAIN * Math.exp(ambVal * Math.log(MAX_GAIN / MIN_GAIN));
 
   // Low-pass filter reference and context (separate time constants)
   var refAlpha = 1 - Math.exp(-dt / REF_TAU);
