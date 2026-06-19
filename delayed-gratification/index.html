@@ -195,26 +195,30 @@ var life = {
 var pastRuns = [];
 
 // --- Life Capital Model ---
-function naturalCapitalRate(epoch, grat) {
-  var peakEpoch = 25 + (1 - grat / 100) * 35;
-  var width = 25 + (1 - grat / 100) * 10;
-  var amplitude = 0.8 + (1 - grat / 100) * 0.6;
-  var x = (epoch - peakEpoch) / width;
-  return amplitude * (-2 * x) * Math.exp(-x * x);
-}
+// Capital grows via investment flow (peaks at g=25) toward a ceiling of 100.
+// Capital decays via aging (increases with epoch) and consumption (increases with g).
+// Investment flow: triangle function symmetric around g=25.
+// Aging: base rate + epoch-dependent + gratification-dependent (quadratic in g).
+
+var BASE_FLOW = 3.0;    // baseline growth rate
+var BONUS_FLOW = 0.5;   // extra growth at optimal g=25
+var BASE_AGING = 0.005;  // natural capital decay
+var AGING_K = 0.10;      // gratification-driven aging coefficient
 
 function investmentFlow(grat) {
-  // Bell curve peaking at ~25-30% gratification
-  // 0% = no growth, 25% = max growth, 100% = no growth
-  var g = grat / 100;
-  return 2.5 * g * (1 - g) * (1 - g);
+  var d = Math.abs(grat - 25);
+  return BASE_FLOW + BONUS_FLOW * Math.max(0, 1 - d / 75);
+}
+
+function agingRate(epoch, grat) {
+  return BASE_AGING + AGING_K * (epoch / 100) * Math.pow(grat / 100, 2);
 }
 
 function updateCapital(epoch, grat, capital, dt) {
-  var natRate = naturalCapitalRate(epoch, grat);
-  var invFlow = investmentFlow(grat);
-  var newCapital = capital + (natRate + invFlow) * dt;
-  return Math.max(5, Math.min(100, newCapital));
+  var flow = investmentFlow(grat);
+  var aging = agingRate(epoch, grat);
+  var dC = flow * (1 - capital / 100) - aging * capital;
+  return Math.max(0, Math.min(100, capital + dC * dt));
 }
 
 function getBands(capital) {
