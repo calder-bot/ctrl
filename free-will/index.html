@@ -233,13 +233,22 @@ var lastTime = 0;
 var nearGoalTime = 0; // how long dot has been near the goal
 
 // --- Physics constants ---
-var DAMPING = 4.0;
+var DAMPING = 3.0;
 var MIN_GAIN = 1.0;
-var MAX_GAIN = 80.0;
+var MAX_GAIN = 300.0;
 var WILL_NOISE_AMP = 3.0;
 var GOAL_TOLERANCE = 0.035;
 var GOAL_HOLD_TIME = 0.4; // seconds near goal to count as reached
 var GOAL_VEL_THRESHOLD = 0.8;
+
+// --- Low-pass filter state ---
+var refFiltered = 0.5;   // filtered reference value
+var ctxFiltered = 0.25;  // filtered context slider value (0-1)
+var FILTER_TAU = 0.5;    // time constant in seconds
+
+// --- Snap constants ---
+var SNAP_RADIUS = 0.06;  // how close ref must be to goal to snap
+var SNAP_STRENGTH = 8.0; // attractive force toward goal
 
 // --- Context polynomials (cubic, snaking) ---
 function ctxCenter(t) {
@@ -250,8 +259,7 @@ function ctxWidth(t) {
   return 0.25 + 0.8 * t - 2.8 * t * t + 2.2 * t * t * t;
 }
 
-function getBounds() {
-  var t = parseInt(ctxSlider.value) / 100;
+function getBounds(t) {
   var cen = ctxCenter(t);
   var w = ctxWidth(t);
   return {
@@ -309,7 +317,7 @@ function draw() {
   if (n < 2) return;
 
   var goal = goals[goalIdx % goals.length];
-  var bounds = getBounds();
+  var bounds = getBounds(ctxFiltered);
 
   // --- Context band (historical) ---
   c.beginPath();
@@ -393,8 +401,7 @@ function draw() {
   c.stroke();
 
   // --- Reference line (subtle) ---
-  var refVal = parseInt(refSlider.value) / 100;
-  var refY = valToY(refVal, p);
+  var refY = valToY(refFiltered, p);
   c.beginPath();
   c.strokeStyle = 'rgba(107, 138, 255, 0.2)';
   c.lineWidth = 1;
@@ -428,18 +435,33 @@ function tick(timestamp) {
   var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
   lastTime = timestamp;
 
-  // Read inputs
+  // Read raw inputs
   var willRaw = (parseInt(willSlider.value) - 50) / 50; // -1 to 1
-  var refVal = parseInt(refSlider.value) / 100;           // 0 to 1
+  var refRaw = parseInt(refSlider.value) / 100;           // 0 to 1
   var ambVal = parseInt(ambSlider.value) / 100;           // 0 to 1
+  var ctxRaw = parseInt(ctxSlider.value) / 100;           // 0 to 1
   var gain = MIN_GAIN + ambVal * (MAX_GAIN - MIN_GAIN);
-  var bounds = getBounds();
+
+  // Low-pass filter reference and context (frame-rate independent)
+  var alpha = 1 - Math.exp(-dt / FILTER_TAU);
+  refFiltered += alpha * (refRaw - refFiltered);
+  ctxFiltered += alpha * (ctxRaw - ctxFiltered);
+
+  // Snap reference toward goal when close
+  var goal = goals[goalIdx % goals.length];
+  var distToGoal = Math.abs(refFiltered - goal);
+  if (distToGoal < SNAP_RADIUS) {
+    var snapForce = (1 - distToGoal / SNAP_RADIUS) * SNAP_STRENGTH;
+    refFiltered += (goal - refFiltered) * snapForce * dt;
+  }
+
+  var bounds = getBounds(ctxFiltered);
 
   // Will = noise (amplitude proportional to slider displacement from center)
   var willForce = Math.abs(willRaw) * (Math.random() * 2 - 1) * WILL_NOISE_AMP;
 
   // Controller: spring toward reference
-  var controlForce = gain * (refVal - dotPos);
+  var controlForce = gain * (refFiltered - dotPos);
 
   // Damping
   var dampForce = -DAMPING * dotVel;
@@ -458,7 +480,6 @@ function tick(timestamp) {
   if (dotPos > 1) { dotPos = 1; dotVel = Math.min(0, dotVel); }
 
   // Check goal proximity
-  var goal = goals[goalIdx % goals.length];
   if (Math.abs(dotPos - goal) < GOAL_TOLERANCE && Math.abs(dotVel) < GOAL_VEL_THRESHOLD) {
     nearGoalTime += dt;
     if (nearGoalTime >= GOAL_HOLD_TIME) {
@@ -480,7 +501,7 @@ function tick(timestamp) {
   // Record history
   hist.push({
     dot: dotPos,
-    goal: goal,
+    goal: goals[goalIdx % goals.length],
     lo: bounds.lo,
     hi: bounds.hi
   });
@@ -498,6 +519,8 @@ function reset() {
   nearGoalTime = 0;
   goalFlash = 0;
   hist = [];
+  refFiltered = 0.5;
+  ctxFiltered = 0.25;
   willSlider.value = 50;
   refSlider.value = 50;
   ambSlider.value = 20;
