@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Learned Helplessness</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    color: #ccc;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  #top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #222;
+  }
+
+  #top-bar .title {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  #canvas-container {
+    flex: 1;
+    position: relative;
+    min-height: 100px;
+    overflow: hidden;
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  #controls {
+    padding: 14px 16px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom, 14px));
+    flex-shrink: 0;
+    border-top: 1px solid #222;
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .slider-row:last-child {
+    margin-bottom: 0;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    background: #222;
+    border-radius: 4px;
+    outline: none;
+    touch-action: pan-x;
+  }
+
+  #system-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #6b8aff;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(107, 138, 255, 0.4);
+  }
+
+  #system-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #6b8aff;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(107, 138, 255, 0.4);
+  }
+
+  #effort-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ff6b8a;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(255, 107, 138, 0.4);
+  }
+
+  #effort-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ff6b8a;
+    cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 8px rgba(255, 107, 138, 0.4);
+  }
+
+  button {
+    width: 44px;
+    height: 44px;
+    border: 1px solid #333;
+    background: #111;
+    color: #ccc;
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0;
+    line-height: 1;
+  }
+
+  button:hover { background: #1a1a1a; border-color: #444; }
+  button:active { background: #222; }
+  button#btn-clear {
+    font-size: 14px;
+    width: 32px;
+    height: 32px;
+    color: #555;
+    border-color: #222;
+    background: transparent;
+  }
+  button#btn-clear:hover { color: #ff6b8a; border-color: #444; }
+
+  @media (max-width: 600px) {
+    #top-bar { padding: 8px 12px; }
+    #top-bar .title { font-size: 10px; }
+    #controls { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)); }
+  }
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <div class="title">Learned Helplessness</div>
+  <button id="btn-clear">&empty;</button>
+</div>
+
+<div id="canvas-container">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="controls">
+  <div class="slider-row">
+    <input type="range" id="system-slider" min="0" max="100" value="0">
+  </div>
+  <div class="slider-row">
+    <input type="range" id="effort-slider" min="0" max="100" value="50">
+  </div>
+</div>
+
+<script>
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+var systemSlider = document.getElementById('system-slider');
+var effortSlider = document.getElementById('effort-slider');
+var btnClear = document.getElementById('btn-clear');
+
+// --- Potential landscape ---
+// W-shaped: two bowls with a hump between them
+// Left bowl (local min) is shallower than right bowl (global min)
+// System slider raises the floor of the left bowl
+
+// Potential function: V(x) parameterized by system slider s
+// x ranges from -1 to 1
+// Left bowl centered at ~-0.5, right bowl at ~0.5
+// Hump at ~0
+
+function potential(x, s) {
+  // Base W-shape: quartic double well
+  // V = a*(x^4) - b*(x^2) + c*x + d
+  // Asymmetric: right bowl is deeper (global min)
+  var s01 = s / 100; // system 0-1
+
+  // Double well: x^4 - 2*x^2 gives wells at x=±1
+  // Shift to make right well deeper: add linear tilt
+  var base = Math.pow(x, 4) - 2 * Math.pow(x, 2);
+
+  // Tilt: makes right side lower (global min)
+  var tilt = -0.3 * x;
+
+  // System effect: raise the left bowl floor
+  // Add a Gaussian bump centered at the left bowl position
+  var leftBowlCenter = -0.85;
+  var bump = s01 * 1.8 * Math.exp(-Math.pow((x - leftBowlCenter) / 0.5, 2));
+
+  return base + tilt + bump;
+}
+
+function potentialGradient(x, s) {
+  var dx = 0.001;
+  return (potential(x + dx, s) - potential(x - dx, s)) / (2 * dx);
+}
+
+// --- Ball physics ---
+var BALL_MASS = 1.0;
+var DAMPING = 2.5;    // friction coefficient
+var GRAVITY = 15.0;   // scales potential gradient to force
+var EFFORT_SCALE = 8.0; // max applied force from effort slider
+
+var ballX = -0.85;    // start in left bowl
+var ballV = 0;        // velocity
+var lastFrameTime = 0;
+
+// --- Canvas ---
+function resizeCanvas() {
+  var container = document.getElementById('canvas-container');
+  var rect = container.getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+window.addEventListener('resize', function() { resizeCanvas(); });
+setTimeout(resizeCanvas, 50);
+
+// --- Coordinate mapping ---
+function getPlotArea() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.width / dpr;
+  var h = canvas.height / dpr;
+  return {
+    left: 20,
+    right: w - 20,
+    top: 30,
+    bottom: h - 20,
+    width: w - 40,
+    height: h - 50
+  };
+}
+
+function xToScreen(x, plot) {
+  // x ranges from -1.5 to 1.5
+  return plot.left + ((x + 1.5) / 3.0) * plot.width;
+}
+
+function vToScreen(v, plot, vMin, vMax) {
+  // Map potential value to screen y
+  var frac = (v - vMin) / (vMax - vMin);
+  return plot.bottom - frac * plot.height;
+}
+
+// --- Drawing ---
+function draw() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.width / dpr;
+  var h = canvas.height / dpr;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+
+  var plot = getPlotArea();
+  var s = parseInt(systemSlider.value);
+
+  // Compute potential curve and find range
+  var N = 200;
+  var points = [];
+  var vMin = Infinity, vMax = -Infinity;
+  for (var i = 0; i <= N; i++) {
+    var x = -1.5 + (3.0 * i / N);
+    var v = potential(x, s);
+    points.push({ x: x, v: v });
+    if (v < vMin) vMin = v;
+    if (v > vMax) vMax = v;
+  }
+
+  // Add padding to range
+  var vRange = vMax - vMin;
+  vMin -= vRange * 0.1;
+  vMax += vRange * 0.15;
+
+  // Draw potential curve
+  ctx.beginPath();
+  ctx.strokeStyle = '#3a3a5c';
+  ctx.lineWidth = 2;
+  for (var i = 0; i <= N; i++) {
+    var sx = xToScreen(points[i].x, plot);
+    var sy = vToScreen(points[i].v, plot, vMin, vMax);
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+
+  // Fill below curve
+  ctx.lineTo(xToScreen(points[N].x, plot), plot.bottom);
+  ctx.lineTo(xToScreen(points[0].x, plot), plot.bottom);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(58, 58, 92, 0.1)';
+  ctx.fill();
+
+  // Draw ball
+  var ballScreenX = xToScreen(ballX, plot);
+  var ballV_val = potential(ballX, s);
+  var ballScreenY = vToScreen(ballV_val, plot, vMin, vMax);
+  var ballRadius = 10;
+
+  // Ball glow
+  ctx.beginPath();
+  ctx.arc(ballScreenX, ballScreenY - ballRadius, ballRadius + 4, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 68, 102, 0.2)';
+  ctx.fill();
+
+  // Ball
+  ctx.beginPath();
+  ctx.arc(ballScreenX, ballScreenY - ballRadius, ballRadius, 0, Math.PI * 2);
+  ctx.fillStyle = '#ff4466';
+  ctx.fill();
+  ctx.strokeStyle = '#ff6b8a';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// --- Physics loop ---
+function tick(timestamp) {
+  if (lastFrameTime === 0) lastFrameTime = timestamp;
+  var dtSeconds = Math.min((timestamp - lastFrameTime) / 1000, 0.05);
+  lastFrameTime = timestamp;
+
+  var s = parseInt(systemSlider.value);
+  var effort = (parseInt(effortSlider.value) - 50) / 50; // -1 to 1
+
+  // Forces
+  var gradForce = -GRAVITY * potentialGradient(ballX, s);
+  var effortForce = effort * EFFORT_SCALE;
+  var dampingForce = -DAMPING * ballV;
+
+  var totalForce = gradForce + effortForce + dampingForce;
+
+  // Integrate (semi-implicit Euler)
+  ballV += (totalForce / BALL_MASS) * dtSeconds;
+  ballX += ballV * dtSeconds;
+
+  // Boundary: clamp to [-1.4, 1.4]
+  if (ballX < -1.4) { ballX = -1.4; ballV = 0; }
+  if (ballX > 1.4) { ballX = 1.4; ballV = 0; }
+
+  draw();
+  requestAnimationFrame(tick);
+}
+
+// --- Reset ---
+function reset() {
+  ballX = -0.85;
+  ballV = 0;
+  systemSlider.value = 0;
+  effortSlider.value = 50;
+}
+
+btnClear.addEventListener('click', reset);
+btnClear.addEventListener('touchend', function(e) {
+  e.preventDefault();
+  reset();
+});
+
+// --- Init ---
+resizeCanvas();
+draw();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
