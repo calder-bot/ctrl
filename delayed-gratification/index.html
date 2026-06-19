@@ -195,15 +195,16 @@ var life = {
 var pastRuns = [];
 
 // --- Life Capital Model ---
-// Capital grows via investment flow (peaks at g=25) toward a ceiling of 100.
-// Capital decays via aging (increases with epoch) and consumption (increases with g).
-// Investment flow: triangle function symmetric around g=25.
-// Aging: base rate + epoch-dependent + gratification-dependent (quadratic in g).
+// Compounding logistic growth: capital grows proportional to itself (compound
+// interest), saturating near 100. Early building creates exponential advantage.
+// Investment flow: triangle peaking at g=25 (distance from 25 determines growth).
+// Aging: base decay + peakTime-based aging (kicks in earlier for higher g).
+// Wellness: sqrt(g) mapping — concave in gratification, linear in capital.
 
-var BASE_FLOW = 3.0;    // baseline growth rate
-var BONUS_FLOW = 0.5;   // extra growth at optimal g=25
-var BASE_AGING = 0.005;  // natural capital decay
-var AGING_K = 0.10;      // gratification-driven aging coefficient
+var BASE_FLOW = 0.02;    // baseline compounding rate
+var BONUS_FLOW = 0.10;   // extra compounding at optimal g=25
+var BASE_AGING = 0.0005; // natural capital decay
+var AGING_K = 0.015;     // peakTime-based aging coefficient
 
 function investmentFlow(grat) {
   var d = Math.abs(grat - 25);
@@ -211,26 +212,30 @@ function investmentFlow(grat) {
 }
 
 function agingRate(epoch, grat) {
-  return BASE_AGING + AGING_K * (epoch / 100) * Math.pow(grat / 100, 2);
+  var peakTime = 100 - grat;
+  var timePastPeak = Math.max(0, (epoch - peakTime) / 100);
+  return BASE_AGING + AGING_K * timePastPeak;
 }
 
 function updateCapital(epoch, grat, capital, dt) {
   var flow = investmentFlow(grat);
   var aging = agingRate(epoch, grat);
-  var dC = flow * (1 - capital / 100) - aging * capital;
-  return Math.max(0, Math.min(100, capital + dC * dt));
+  // Compounding logistic: growth proportional to capital itself
+  var dC = flow * capital * (1 - capital / 100) - aging * capital;
+  return Math.max(0.1, Math.min(100, capital + dC * dt));
 }
 
 function getBands(capital) {
-  var bandWidth = 10 + capital * 0.4;
-  var center = capital;
-  var upper = Math.min(100, center + bandWidth / 2);
-  var lower = Math.max(0, center - bandWidth / 2);
+  // Band: lower = 20% of capital, upper = capital
+  var upper = capital;
+  var lower = 0.2 * capital;
   return { upper: upper, lower: lower };
 }
 
 function getWellness(grat, upper, lower) {
-  return lower + (grat / 100) * (upper - lower);
+  // Concave in gratification (sqrt), linear in capital
+  var gFrac = Math.sqrt(grat / 100);
+  return lower + gFrac * (upper - lower);
 }
 
 // --- Canvas setup ---
