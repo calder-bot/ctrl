@@ -251,6 +251,14 @@ var CTX_TAU = 0.5;       // context time constant
 var SNAP_RADIUS = 0.06;  // how close ref must be to goal to snap
 var SNAP_STRENGTH = 8.0; // attractive force toward goal
 
+// --- Context elastic wall ---
+var CTX_STIFFNESS = 40.0;  // spring force when outside bounds
+var AMB_DRAIN_RATE = 30.0; // how fast ambition drains at boundary (units/sec)
+var AMB_RECOVERY_RATE = 15.0; // how fast ambition recovers (units/sec)
+var AMB_DRAIN_TARGET = 20;   // ambition drains toward this (0-100)
+var AMB_RECOVERY_TARGET = 50; // ambition recovers toward this (0-100)
+var ambitionLevel = 50;       // current effective ambition capacity (0-100)
+
 // --- Context polynomials (cubic, snaking) ---
 function ctxCenter(t) {
   return 0.2 + 1.6 * t - 4.5 * t * t + 3.5 * t * t * t;
@@ -441,10 +449,6 @@ function tick(timestamp) {
   var refRaw = parseInt(refSlider.value) / 100;           // 0 to 1
   var ambVal = parseInt(ambSlider.value) / 100;           // 0 to 1
   var ctxRaw = parseInt(ctxSlider.value) / 100;           // 0 to 1
-  // Exponential gain mapping: gentle until 70%, steep 70%→100%
-  // 0%→1, 50%→22, 70%→77, 90%→268, 100%→500
-  var gain = MIN_GAIN * Math.exp(ambVal * Math.log(MAX_GAIN / MIN_GAIN));
-
   // Low-pass filter reference and context (separate time constants)
   var refAlpha = 1 - Math.exp(-dt / REF_TAU);
   var ctxAlpha = 1 - Math.exp(-dt / CTX_TAU);
@@ -461,27 +465,47 @@ function tick(timestamp) {
 
   var bounds = getBounds(ctxFiltered);
 
+  // --- Context elastic walls + ambition drain ---
+  var overHi = Math.max(0, dotPos - bounds.hi);
+  var overLo = Math.max(0, bounds.lo - dotPos);
+  var atBoundary = (overHi > 0.005 || overLo > 0.005);
+
+  // Ambition drain/recovery
+  if (atBoundary) {
+    // Drain toward AMB_DRAIN_TARGET
+    ambitionLevel += (AMB_DRAIN_TARGET - ambitionLevel) * Math.min(1, AMB_DRAIN_RATE * dt / 100);
+  } else {
+    // Recover toward AMB_RECOVERY_TARGET
+    ambitionLevel += (AMB_RECOVERY_TARGET - ambitionLevel) * Math.min(1, AMB_RECOVERY_RATE * dt / 100);
+  }
+  ambitionLevel = Math.max(0, Math.min(100, ambitionLevel));
+
+  // Effective ambition = min(user slider, current ambition capacity)
+  var effectiveAmb = Math.min(ambVal * 100, ambitionLevel) / 100;
+  var effectiveGain = MIN_GAIN * Math.exp(effectiveAmb * Math.log(MAX_GAIN / MIN_GAIN));
+
+  // Elastic wall force (spring pushing back into band)
+  var contextForce = 0;
+  if (overHi > 0) contextForce = -CTX_STIFFNESS * overHi;
+  if (overLo > 0) contextForce = CTX_STIFFNESS * overLo;
+
   // Will = noise (amplitude proportional to slider displacement from center)
   var willForce = Math.abs(willRaw) * (Math.random() * 2 - 1) * WILL_NOISE_AMP;
 
-  // Controller: spring toward reference
-  var controlForce = gain * (refFiltered - dotPos);
+  // Controller: spring toward reference (using effective gain)
+  var controlForce = effectiveGain * (refFiltered - dotPos);
 
   // Damping
   var dampForce = -DAMPING * dotVel;
 
   // Integrate (semi-implicit Euler)
-  var totalForce = controlForce + dampForce + willForce;
+  var totalForce = controlForce + dampForce + willForce + contextForce;
   dotVel += totalForce * dt;
   dotPos += dotVel * dt;
 
-  // Clamp to context bounds
-  if (dotPos < bounds.lo) { dotPos = bounds.lo; dotVel = Math.max(0, dotVel); }
-  if (dotPos > bounds.hi) { dotPos = bounds.hi; dotVel = Math.min(0, dotVel); }
-
-  // Clamp to [0, 1]
-  if (dotPos < 0) { dotPos = 0; dotVel = Math.max(0, dotVel); }
-  if (dotPos > 1) { dotPos = 1; dotVel = Math.min(0, dotVel); }
+  // Soft clamp to [−0.1, 1.1] to prevent runaway
+  if (dotPos < -0.1) { dotPos = -0.1; dotVel = Math.max(0, dotVel); }
+  if (dotPos > 1.1) { dotPos = 1.1; dotVel = Math.min(0, dotVel); }
 
   // Check goal proximity
   if (Math.abs(dotPos - goal) < GOAL_TOLERANCE && Math.abs(dotVel) < GOAL_VEL_THRESHOLD) {
@@ -525,6 +549,7 @@ function reset() {
   hist = [];
   refFiltered = 0.5;
   ctxFiltered = 0.25;
+  ambitionLevel = 50;
   willSlider.value = 50;
   refSlider.value = 50;
   ambSlider.value = 20;
