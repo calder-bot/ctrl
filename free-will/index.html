@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Free Will</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    color: #ccc;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  #top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #222;
+  }
+
+  #top-bar .title {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  #canvas-container {
+    flex: 1;
+    position: relative;
+    min-height: 100px;
+    overflow: hidden;
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  #controls {
+    padding: 12px 16px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
+    flex-shrink: 0;
+    border-top: 1px solid #222;
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .slider-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .slider-label {
+    font-size: 10px;
+    color: #555;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    width: 68px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    background: #1a1a1a;
+    border-radius: 3px;
+    outline: none;
+    touch-action: pan-x;
+  }
+
+  /* Will slider — gray (the futile one) */
+  #will-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #555; cursor: pointer;
+    border: 2px solid #000;
+  }
+  #will-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #555; cursor: pointer;
+    border: 2px solid #000;
+  }
+
+  /* Reference slider — blue */
+  #ref-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #6b8aff; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(107, 138, 255, 0.3);
+  }
+  #ref-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #6b8aff; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(107, 138, 255, 0.3);
+  }
+
+  /* Ambition slider — gold */
+  #amb-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #ffb84d; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(255, 184, 77, 0.3);
+  }
+  #amb-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #ffb84d; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(255, 184, 77, 0.3);
+  }
+
+  /* Context slider — green */
+  #ctx-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #4dcc77; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(77, 204, 119, 0.3);
+  }
+  #ctx-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #4dcc77; cursor: pointer;
+    border: 2px solid #000;
+    box-shadow: 0 0 6px rgba(77, 204, 119, 0.3);
+  }
+
+  button {
+    width: 32px;
+    height: 32px;
+    border: 1px solid #222;
+    background: transparent;
+    color: #555;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0;
+    line-height: 1;
+  }
+
+  button:hover { color: #ff6b8a; border-color: #444; }
+  button:active { background: #222; }
+
+  @media (max-width: 600px) {
+    #top-bar { padding: 8px 12px; }
+    #top-bar .title { font-size: 10px; }
+    #controls { padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom, 8px)); }
+    .slider-label { font-size: 9px; width: 56px; }
+    .slider-row { gap: 8px; margin-bottom: 5px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <div class="title">Free Will</div>
+  <button id="btn-clear">&#8634;</button>
+</div>
+
+<div id="canvas-container">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="controls">
+  <div class="slider-row">
+    <span class="slider-label">Will</span>
+    <input type="range" id="will-slider" min="0" max="100" value="50">
+  </div>
+  <div class="slider-row">
+    <span class="slider-label">Reference</span>
+    <input type="range" id="ref-slider" min="0" max="100" value="50">
+  </div>
+  <div class="slider-row">
+    <span class="slider-label">Ambition</span>
+    <input type="range" id="amb-slider" min="0" max="100" value="20">
+  </div>
+  <div class="slider-row">
+    <span class="slider-label">Context</span>
+    <input type="range" id="ctx-slider" min="0" max="100" value="25">
+  </div>
+</div>
+
+<script>
+var canvas = document.getElementById('canvas');
+var c = canvas.getContext('2d');
+var willSlider = document.getElementById('will-slider');
+var refSlider = document.getElementById('ref-slider');
+var ambSlider = document.getElementById('amb-slider');
+var ctxSlider = document.getElementById('ctx-slider');
+var btnClear = document.getElementById('btn-clear');
+
+// --- History ---
+var HIST = 300;
+var hist = []; // {dot, goal, lo, hi}
+
+// --- State ---
+var dotPos = 0.5;
+var dotVel = 0;
+var goalIdx = 0;
+var goalFlash = 0; // countdown for goal-reached flash
+
+// Goal sequence: first 3 in default band, then alternating outside
+var goals = [0.35, 0.45, 0.30, 0.75, 0.15, 0.55, 0.85, 0.10];
+
+var lastTime = 0;
+var nearGoalTime = 0; // how long dot has been near the goal
+
+// --- Physics constants ---
+var DAMPING = 4.0;
+var MIN_GAIN = 1.0;
+var MAX_GAIN = 80.0;
+var WILL_NOISE_AMP = 3.0;
+var GOAL_TOLERANCE = 0.035;
+var GOAL_HOLD_TIME = 0.4; // seconds near goal to count as reached
+var GOAL_VEL_THRESHOLD = 0.8;
+
+// --- Context polynomials (cubic, snaking) ---
+function ctxCenter(t) {
+  return 0.2 + 1.6 * t - 4.5 * t * t + 3.5 * t * t * t;
+}
+
+function ctxWidth(t) {
+  return 0.25 + 0.8 * t - 2.8 * t * t + 2.2 * t * t * t;
+}
+
+function getBounds() {
+  var t = parseInt(ctxSlider.value) / 100;
+  var cen = ctxCenter(t);
+  var w = ctxWidth(t);
+  return {
+    lo: Math.max(0, cen - w / 2),
+    hi: Math.min(1, cen + w / 2)
+  };
+}
+
+// --- Canvas ---
+function resizeCanvas() {
+  var container = document.getElementById('canvas-container');
+  var rect = container.getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resizeCanvas);
+setTimeout(resizeCanvas, 50);
+
+// --- Coordinate mapping ---
+function getPlot() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.width / dpr;
+  var h = canvas.height / dpr;
+  return {
+    left: 2,
+    right: w - 2,
+    top: 16,
+    bottom: h - 8,
+    w: w - 4,
+    h: h - 24
+  };
+}
+
+function valToY(v, p) {
+  // v in [0,1], 0=bottom, 1=top
+  return p.bottom - v * p.h;
+}
+
+function idxToX(i, p) {
+  // i in [0, HIST-1], maps across width
+  return p.left + (i / (HIST - 1)) * p.w;
+}
+
+// --- Drawing ---
+function draw() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.width / dpr;
+  var h = canvas.height / dpr;
+  c.clearRect(0, 0, w, h);
+
+  var p = getPlot();
+  var n = hist.length;
+  if (n < 2) return;
+
+  var goal = goals[goalIdx % goals.length];
+  var bounds = getBounds();
+
+  // --- Context band (historical) ---
+  c.beginPath();
+  for (var i = 0; i < n; i++) {
+    var x = idxToX(HIST - n + i, p);
+    var y = valToY(hist[i].hi, p);
+    if (i === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  for (var i = n - 1; i >= 0; i--) {
+    var x = idxToX(HIST - n + i, p);
+    var y = valToY(hist[i].lo, p);
+    c.lineTo(x, y);
+  }
+  c.closePath();
+  c.fillStyle = 'rgba(77, 204, 119, 0.07)';
+  c.fill();
+
+  // Context band edges
+  c.beginPath();
+  c.strokeStyle = 'rgba(77, 204, 119, 0.25)';
+  c.lineWidth = 1;
+  for (var i = 0; i < n; i++) {
+    var x = idxToX(HIST - n + i, p);
+    if (i === 0) c.moveTo(x, valToY(hist[i].hi, p));
+    else c.lineTo(x, valToY(hist[i].hi, p));
+  }
+  c.stroke();
+  c.beginPath();
+  for (var i = 0; i < n; i++) {
+    var x = idxToX(HIST - n + i, p);
+    if (i === 0) c.moveTo(x, valToY(hist[i].lo, p));
+    else c.lineTo(x, valToY(hist[i].lo, p));
+  }
+  c.stroke();
+
+  // --- Goal line ---
+  var goalInBand = goal >= bounds.lo && goal <= bounds.hi;
+  var goalAlpha = goalInBand ? 0.6 : 0.2;
+  if (goalFlash > 0) {
+    goalAlpha = 0.9;
+  }
+  var goalY = valToY(goal, p);
+
+  // Dashed if unreachable
+  c.beginPath();
+  c.strokeStyle = goalFlash > 0
+    ? 'rgba(77, 255, 136, ' + goalAlpha + ')'
+    : 'rgba(255, 107, 138, ' + goalAlpha + ')';
+  c.lineWidth = 1.5;
+  if (!goalInBand && goalFlash <= 0) {
+    c.setLineDash([6, 4]);
+  }
+  c.moveTo(p.left, goalY);
+  c.lineTo(p.right, goalY);
+  c.stroke();
+  c.setLineDash([]);
+
+  // Goal marker on right edge
+  c.beginPath();
+  var mx = p.right - 1;
+  c.moveTo(mx, goalY - 5);
+  c.lineTo(mx + 6, goalY);
+  c.lineTo(mx, goalY + 5);
+  c.closePath();
+  c.fillStyle = goalFlash > 0
+    ? 'rgba(77, 255, 136, 0.8)'
+    : 'rgba(255, 107, 138, ' + (goalInBand ? 0.7 : 0.25) + ')';
+  c.fill();
+
+  // --- Dot trace ---
+  c.beginPath();
+  c.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+  c.lineWidth = 1.5;
+  for (var i = 0; i < n; i++) {
+    var x = idxToX(HIST - n + i, p);
+    var y = valToY(hist[i].dot, p);
+    if (i === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  c.stroke();
+
+  // --- Reference line (subtle) ---
+  var refVal = parseInt(refSlider.value) / 100;
+  var refY = valToY(refVal, p);
+  c.beginPath();
+  c.strokeStyle = 'rgba(107, 138, 255, 0.2)';
+  c.lineWidth = 1;
+  c.setLineDash([3, 5]);
+  c.moveTo(p.left, refY);
+  c.lineTo(p.right, refY);
+  c.stroke();
+  c.setLineDash([]);
+
+  // --- Current dot ---
+  var lastDot = hist[n - 1].dot;
+  var dotScreenX = idxToX(HIST - 1, p);
+  var dotScreenY = valToY(lastDot, p);
+
+  // Glow
+  c.beginPath();
+  c.arc(dotScreenX, dotScreenY, 7, 0, Math.PI * 2);
+  c.fillStyle = 'rgba(255, 255, 255, 0.15)';
+  c.fill();
+
+  // Dot
+  c.beginPath();
+  c.arc(dotScreenX, dotScreenY, 4, 0, Math.PI * 2);
+  c.fillStyle = '#fff';
+  c.fill();
+}
+
+// --- Physics ---
+function tick(timestamp) {
+  if (lastTime === 0) lastTime = timestamp;
+  var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+
+  // Read inputs
+  var willRaw = (parseInt(willSlider.value) - 50) / 50; // -1 to 1
+  var refVal = parseInt(refSlider.value) / 100;           // 0 to 1
+  var ambVal = parseInt(ambSlider.value) / 100;           // 0 to 1
+  var gain = MIN_GAIN + ambVal * (MAX_GAIN - MIN_GAIN);
+  var bounds = getBounds();
+
+  // Will = noise (amplitude proportional to slider displacement from center)
+  var willForce = Math.abs(willRaw) * (Math.random() * 2 - 1) * WILL_NOISE_AMP;
+
+  // Controller: spring toward reference
+  var controlForce = gain * (refVal - dotPos);
+
+  // Damping
+  var dampForce = -DAMPING * dotVel;
+
+  // Integrate (semi-implicit Euler)
+  var totalForce = controlForce + dampForce + willForce;
+  dotVel += totalForce * dt;
+  dotPos += dotVel * dt;
+
+  // Clamp to context bounds
+  if (dotPos < bounds.lo) { dotPos = bounds.lo; dotVel = Math.max(0, dotVel); }
+  if (dotPos > bounds.hi) { dotPos = bounds.hi; dotVel = Math.min(0, dotVel); }
+
+  // Clamp to [0, 1]
+  if (dotPos < 0) { dotPos = 0; dotVel = Math.max(0, dotVel); }
+  if (dotPos > 1) { dotPos = 1; dotVel = Math.min(0, dotVel); }
+
+  // Check goal proximity
+  var goal = goals[goalIdx % goals.length];
+  if (Math.abs(dotPos - goal) < GOAL_TOLERANCE && Math.abs(dotVel) < GOAL_VEL_THRESHOLD) {
+    nearGoalTime += dt;
+    if (nearGoalTime >= GOAL_HOLD_TIME) {
+      // Goal reached!
+      goalIdx++;
+      nearGoalTime = 0;
+      goalFlash = 0.5; // flash duration
+    }
+  } else {
+    nearGoalTime = 0;
+  }
+
+  // Flash countdown
+  if (goalFlash > 0) {
+    goalFlash -= dt;
+    if (goalFlash < 0) goalFlash = 0;
+  }
+
+  // Record history
+  hist.push({
+    dot: dotPos,
+    goal: goal,
+    lo: bounds.lo,
+    hi: bounds.hi
+  });
+  if (hist.length > HIST) hist.shift();
+
+  draw();
+  requestAnimationFrame(tick);
+}
+
+// --- Reset ---
+function reset() {
+  dotPos = 0.5;
+  dotVel = 0;
+  goalIdx = 0;
+  nearGoalTime = 0;
+  goalFlash = 0;
+  hist = [];
+  willSlider.value = 50;
+  refSlider.value = 50;
+  ambSlider.value = 20;
+  ctxSlider.value = 25;
+}
+
+btnClear.addEventListener('click', reset);
+btnClear.addEventListener('touchend', function(e) {
+  e.preventDefault();
+  reset();
+});
+
+// --- Init ---
+resizeCanvas();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
