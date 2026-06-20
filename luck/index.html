@@ -341,8 +341,6 @@
   btnPlay.addEventListener('click', function() {
     if (!running) {
       if (runTime >= RUN_DURATION) {
-        scores.push(totalScore);
-        updatePrevScores();
         reset(false); // same seed for replay
       }
       running = true;
@@ -366,7 +364,11 @@
       prevScoresEl.textContent = '';
       return;
     }
-    prevScoresEl.textContent = scores.slice(-5).map(function(s) { return Math.round(s); }).join('  ');
+    // Top 3 scores, sorted ascending (highest last)
+    var sorted = scores.map(function(s) { return Math.round(s); })
+      .sort(function(a, b) { return a - b; });
+    var top3 = sorted.slice(-3);
+    prevScoresEl.textContent = top3.join('  ');
   }
 
   // --- Precompute heatmap ImageData for performance ---
