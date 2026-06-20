@@ -233,7 +233,7 @@
 
   // --- Event distribution: keyframe-based narrative ---
   // Each keyframe: [time, mean, sigma]
-  // Linear interpolation between keyframes
+  // Catmull-Rom spline interpolation for C1 smooth curves
   var KEYFRAMES = [
     // Phase 1: Random luck (0-6s) — wide, drifting center
     [0,   0.45, 0.35],
@@ -243,14 +243,14 @@
     [8,   0.65, 0.20],
     [11,  0.75, 0.12],
     [14,  0.75, 0.08],
-    // Phase 3: Shiny distraction (14-16s) — brief flash left
+    // Phase 3: Shiny distraction (14-15s) — brief flash left
     [14.5, 0.50, 0.10],
-    [15,  0.25, 0.10],
-    [15.5, 0.25, 0.10],
-    [16,  0.50, 0.10],
-    // Phase 4: Deep specialization (16-22s) — very tight right
-    [17,  0.75, 0.08],
-    [19,  0.80, 0.06],
+    [14.8, 0.25, 0.10],
+    [15.0, 0.25, 0.10],
+    [15.3, 0.50, 0.10],
+    // Phase 4: Deep specialization (15.5-22s) — very tight right
+    [16,  0.75, 0.08],
+    [18,  0.80, 0.06],
     [22,  0.80, 0.06],
     // Phase 5: The world shifts (22-28s) — tight, mean drifts left
     [25,  0.50, 0.06],
@@ -260,25 +260,46 @@
     [30,  0.25, 0.15],
   ];
 
-  // Smoothstep S-curve: 3f² - 2f³
-  function smoothstep(f) { return f * f * (3 - 2 * f); }
-
-  function lerpKeyframes(t) {
-    if (t <= KEYFRAMES[0][0]) return { mean: KEYFRAMES[0][1], sigma: KEYFRAMES[0][2] };
-    var last = KEYFRAMES[KEYFRAMES.length - 1];
-    if (t >= last[0]) return { mean: last[1], sigma: last[2] };
-    for (var i = 0; i < KEYFRAMES.length - 1; i++) {
-      var a = KEYFRAMES[i], b = KEYFRAMES[i + 1];
-      if (t >= a[0] && t <= b[0]) {
-        var f = smoothstep((t - a[0]) / (b[0] - a[0]));
-        return { mean: a[1] + f * (b[1] - a[1]), sigma: a[2] + f * (b[2] - a[2]) };
-      }
-    }
-    return { mean: last[1], sigma: last[2] };
+  // Catmull-Rom spline: interpolates through control points with C1 continuity
+  function catmullRom(p0, p1, p2, p3, t) {
+    var t2 = t * t, t3 = t2 * t;
+    return 0.5 * (
+      (2 * p1) +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    );
   }
 
-  function eventMean(t) { return lerpKeyframes(t).mean; }
-  function eventSigma(t) { return lerpKeyframes(t).sigma; }
+  function interpolateKeyframes(t) {
+    var n = KEYFRAMES.length;
+    if (t <= KEYFRAMES[0][0]) return { mean: KEYFRAMES[0][1], sigma: KEYFRAMES[0][2] };
+    if (t >= KEYFRAMES[n - 1][0]) return { mean: KEYFRAMES[n - 1][1], sigma: KEYFRAMES[n - 1][2] };
+
+    // Find the segment
+    var seg = 0;
+    for (var i = 0; i < n - 1; i++) {
+      if (t >= KEYFRAMES[i][0] && t <= KEYFRAMES[i + 1][0]) { seg = i; break; }
+    }
+
+    var f = (t - KEYFRAMES[seg][0]) / (KEYFRAMES[seg + 1][0] - KEYFRAMES[seg][0]);
+
+    // Get 4 control points (clamp at boundaries)
+    var i0 = Math.max(0, seg - 1);
+    var i1 = seg;
+    var i2 = seg + 1;
+    var i3 = Math.min(n - 1, seg + 2);
+
+    var mean = catmullRom(KEYFRAMES[i0][1], KEYFRAMES[i1][1], KEYFRAMES[i2][1], KEYFRAMES[i3][1], f);
+    var sigma = catmullRom(KEYFRAMES[i0][2], KEYFRAMES[i1][2], KEYFRAMES[i2][2], KEYFRAMES[i3][2], f);
+
+    // Clamp sigma to stay positive
+    if (sigma < 0.02) sigma = 0.02;
+    return { mean: mean, sigma: sigma };
+  }
+
+  function eventMean(t) { return interpolateKeyframes(t).mean; }
+  function eventSigma(t) { return interpolateKeyframes(t).sigma; }
 
   // --- Gaussian PDF (unnormalized) ---
   function gaussPdf(x, mean, sigma) {
