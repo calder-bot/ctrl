@@ -179,7 +179,7 @@
 (function() {
   // --- Constants ---
   var BINS = 1000;
-  var RUN_DURATION = 15.0;
+  var RUN_DURATION = 30.0;
   var LOOKAHEAD = 5.0;
   var EVENT_RATE = 2.5; // events per second
   var DECAY_RATE = 0.25; // per second (tau ~4s)
@@ -480,7 +480,7 @@
 
       // Red column on skill graph
       ctx.fillStyle = 'rgba(255, 68, 68, ' + (alpha * 0.5) + ')';
-      ctx.fillRect(fx - 2, skillH - fh, 4, fh);
+      ctx.fillRect(fx - 4, skillH - fh, 8, fh);
 
       // Red dot at the event position
       ctx.beginPath();
