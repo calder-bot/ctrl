@@ -187,7 +187,7 @@
   var MAX_SKILL = 10.0;
   var SIGMA_MIN = 0.03;
   var SIGMA_MAX = 0.25;
-  var HEATMAP_ROWS = 200; // resolution of the scrolling heatmap
+  var HEATMAP_ROWS = 600; // resolution of the scrolling heatmap
 
   // --- DOM ---
   var canvas = document.getElementById('canvas');
@@ -345,7 +345,7 @@
       prevScoresEl.textContent = '';
       return;
     }
-    prevScoresEl.textContent = scores.slice(-5).join('  ');
+    prevScoresEl.textContent = scores.slice(-5).map(function(s) { return Math.round(s); }).join('  ');
   }
 
   // --- Precompute heatmap ImageData for performance ---
