@@ -231,15 +231,51 @@
     return mean + sigma * z;
   }
 
-  // --- Event distribution polynomials ---
-  function eventMean(t) {
-    var s = t / RUN_DURATION;
-    return 0.3 + 1.8 * s - 5.4 * s * s + 6.0 * s * s * s - 2.0 * s * s * s * s;
+  // --- Event distribution: keyframe-based narrative ---
+  // Each keyframe: [time, mean, sigma]
+  // Linear interpolation between keyframes
+  var KEYFRAMES = [
+    // Phase 1: Random luck (0-6s) — wide, drifting center
+    [0,   0.45, 0.35],
+    [3,   0.55, 0.35],
+    [6,   0.50, 0.30],
+    // Phase 2: Specialization pays (6-14s) — narrows to right
+    [8,   0.65, 0.20],
+    [11,  0.75, 0.12],
+    [14,  0.75, 0.08],
+    // Phase 3: Shiny distraction (14-16s) — brief flash left
+    [14.5, 0.50, 0.10],
+    [15,  0.25, 0.10],
+    [15.5, 0.25, 0.10],
+    [16,  0.50, 0.10],
+    // Phase 4: Deep specialization (16-22s) — very tight right
+    [17,  0.75, 0.08],
+    [19,  0.80, 0.06],
+    [22,  0.80, 0.06],
+    // Phase 5: The world shifts (22-28s) — tight, mean drifts left
+    [25,  0.50, 0.06],
+    [28,  0.20, 0.06],
+    // Phase 6: New season (28-30s) — opens up at new position
+    [29,  0.20, 0.10],
+    [30,  0.25, 0.15],
+  ];
+
+  function lerpKeyframes(t) {
+    if (t <= KEYFRAMES[0][0]) return { mean: KEYFRAMES[0][1], sigma: KEYFRAMES[0][2] };
+    var last = KEYFRAMES[KEYFRAMES.length - 1];
+    if (t >= last[0]) return { mean: last[1], sigma: last[2] };
+    for (var i = 0; i < KEYFRAMES.length - 1; i++) {
+      var a = KEYFRAMES[i], b = KEYFRAMES[i + 1];
+      if (t >= a[0] && t <= b[0]) {
+        var f = (t - a[0]) / (b[0] - a[0]);
+        return { mean: a[1] + f * (b[1] - a[1]), sigma: a[2] + f * (b[2] - a[2]) };
+      }
+    }
+    return { mean: last[1], sigma: last[2] };
   }
-  function eventSigma(t) {
-    var s = t / RUN_DURATION;
-    return 0.08 + 0.12 * s - 0.3 * s * s + 0.25 * s * s * s;
-  }
+
+  function eventMean(t) { return lerpKeyframes(t).mean; }
+  function eventSigma(t) { return lerpKeyframes(t).sigma; }
 
   // --- Gaussian PDF (unnormalized) ---
   function gaussPdf(x, mean, sigma) {
