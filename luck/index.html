@@ -260,6 +260,9 @@
     [30,  0.25, 0.15],
   ];
 
+  // Smoothstep S-curve: 3f² - 2f³
+  function smoothstep(f) { return f * f * (3 - 2 * f); }
+
   function lerpKeyframes(t) {
     if (t <= KEYFRAMES[0][0]) return { mean: KEYFRAMES[0][1], sigma: KEYFRAMES[0][2] };
     var last = KEYFRAMES[KEYFRAMES.length - 1];
@@ -267,7 +270,7 @@
     for (var i = 0; i < KEYFRAMES.length - 1; i++) {
       var a = KEYFRAMES[i], b = KEYFRAMES[i + 1];
       if (t >= a[0] && t <= b[0]) {
-        var f = (t - a[0]) / (b[0] - a[0]);
+        var f = smoothstep((t - a[0]) / (b[0] - a[0]));
         return { mean: a[1] + f * (b[1] - a[1]), sigma: a[2] + f * (b[2] - a[2]) };
       }
     }
