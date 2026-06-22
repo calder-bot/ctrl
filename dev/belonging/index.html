@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Belonging</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  canvas {
+    flex: 1;
+    width: 100%;
+    display: block;
+    touch-action: none;
+  }
+  #slider-wrap {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 20px 32px;
+    padding-bottom: max(20px, env(safe-area-inset-bottom, 20px));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: none;
+  }
+  #openness {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    max-width: 360px;
+    height: 10px;
+    background: linear-gradient(90deg, #1a1a1a 0%, #2a1a2e 100%);
+    border-radius: 5px;
+    outline: none;
+    touch-action: pan-x;
+    pointer-events: auto;
+    transition: background 0.3s;
+  }
+  #openness::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 40% 38%, #f0f0f0, #c0c0c0);
+    cursor: pointer;
+    border: 3px solid #000;
+    box-shadow: 0 0 12px rgba(200, 200, 200, 0.15);
+    transition: box-shadow 0.2s;
+  }
+  #openness::-moz-range-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 40% 38%, #f0f0f0, #c0c0c0);
+    cursor: pointer;
+    border: 3px solid #000;
+    box-shadow: 0 0 12px rgba(200, 200, 200, 0.15);
+  }
+  @media (max-width: 600px) {
+    #slider-wrap { padding: 16px 24px; }
+    #openness { max-width: 300px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="slider-wrap">
+  <input type="range" id="openness" min="0" max="100" value="25">
+</div>
+
+<script>
+(function() {
+  // --- DOM ---
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var slider = document.getElementById('openness');
+  var dpr = window.devicePixelRatio || 1;
+
+  var W, H, minDim;
+
+  function resize() {
+    var rect = canvas.getBoundingClientRect();
+    W = rect.width;
+    H = rect.height;
+    minDim = Math.min(W, H);
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (people.length) repositionPeople();
+  }
+
+  // --- Scaling helpers ---
+  function proxRadius() { return minDim * 0.12; }
+  function personRadius() { return Math.max(5, minDim * 0.012); }
+  function playerRadius() { return Math.max(7, minDim * 0.016); }
+  function clusterSpread() { return Math.max(18, minDim * 0.035); }
+
+  // --- State ---
+  var noveltyBar = 0;
+  var connectionBar = 0;
+  var energyBar = 1;
+
+  var player = { x: 0, y: 0, tx: 0, ty: 0, vx: 0, vy: 0 };
+  var people = [];
+
+  function openness() { return slider.value / 100; }
+
+  // --- Cluster definitions (normalized 0-1) ---
+  var clusterDefs = [
+    { cx: 0.14, cy: 0.18, n: 5 },
+    { cx: 0.78, cy: 0.14, n: 4 },
+    { cx: 0.48, cy: 0.42, n: 6 },
+    { cx: 0.18, cy: 0.72, n: 4 },
+    { cx: 0.82, cy: 0.58, n: 7 },
+    { cx: 0.52, cy: 0.82, n: 3 },
+  ];
+
+  // Seeded pseudo-random for deterministic layout
+  var seed = 42;
+  function srand() {
+    seed = (seed * 16807 + 0) % 2147483647;
+    return (seed - 1) / 2147483646;
+  }
+
+  function generateWorld() {
+    seed = 42;
+    people = [];
+
+    for (var c = 0; c < clusterDefs.length; c++) {
+      var def = clusterDefs[c];
+      for (var i = 0; i < def.n; i++) {
+        var angle = (Math.PI * 2 * i / def.n) + (srand() * 0.6 - 0.3);
+        var dist = clusterSpread() * (0.6 + srand() * 0.5);
+
+        // ~30% of people can connect deeply
+        var canConnect = srand() < 0.30;
+        var cap = canConnect
+          ? 0.55 + srand() * 0.45  // 0.55-1.0
+          : 0.03 + srand() * 0.12; // 0.03-0.15
+
+        people.push({
+          nx: def.cx, ny: def.cy,  // normalized cluster center
+          angle: angle,
+          distFrac: dist / clusterSpread(),
+          x: 0, y: 0,
+          conn: 0,
+          cap: cap,
+          noveltyLeft: 1.0,
+          cluster: c,
+          // Subtle idle animation offset
+          phase: srand() * Math.PI * 2,
+          breathSpeed: 0.3 + srand() * 0.4
+        });
+      }
+    }
+
+    repositionPeople();
+
+    // Player starts in open space between clusters
+    player.x = W * 0.38;
+    player.y = H * 0.28;
+    player.tx = player.x;
+    player.ty = player.y;
+    player.vx = 0;
+    player.vy = 0;
+
+    noveltyBar = 0;
+    connectionBar = 0;
+    energyBar = 1;
+  }
+
+  function repositionPeople() {
+    var spread = clusterSpread();
+    for (var i = 0; i < people.length; i++) {
+      var p = people[i];
+      p.x = p.nx * W + Math.cos(p.angle) * p.distFrac * spread;
+      p.y = p.ny * H + Math.sin(p.angle) * p.distFrac * spread;
+    }
+  }
+
+  // --- Input ---
+  var dragging = false;
+
+  canvas.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    var rect = canvas.getBoundingClientRect();
+    player.tx = e.clientX - rect.left;
+    player.ty = e.clientY - rect.top;
+    dragging = true;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', function(e) {
+    if (dragging) {
+      var rect = canvas.getBoundingClientRect();
+      player.tx = e.clientX - rect.left;
+      player.ty = e.clientY - rect.top;
+    }
+  });
+  canvas.addEventListener('pointerup', function() { dragging = false; });
+  canvas.addEventListener('pointercancel', function() { dragging = false; });
+
+  // Prevent slider interaction from moving player
+  slider.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
+
+  // --- Simulation ---
+  var lastTime = 0;
+
+  function dist(ax, ay, bx, by) {
+    var dx = ax - bx, dy = ay - by;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function update(dt) {
+    if (dt <= 0 || dt > 0.1) dt = 1 / 60;
+
+    var o = openness();
+    var pr = proxRadius();
+
+    // --- Move player (spring-damped) ---
+    var dx = player.tx - player.x;
+    var dy = player.ty - player.y;
+    var d = Math.sqrt(dx * dx + dy * dy);
+
+    // Energy affects movement — sluggish when drained
+    var energyMult = 0.3 + energyBar * 0.7;
+
+    if (d > 0.5) {
+      var stiffness = 4.5 * energyMult;
+      var damping = 6.0;
+      player.vx += (dx * stiffness - player.vx * damping) * dt;
+      player.vy += (dy * stiffness - player.vy * damping) * dt;
+
+      // Limit max speed
+      var maxSpeed = minDim * 0.6 * energyMult;
+      var speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+      if (speed > maxSpeed) {
+        player.vx *= maxSpeed / speed;
+        player.vy *= maxSpeed / speed;
+      }
+    } else {
+      player.vx *= 0.85;
+      player.vy *= 0.85;
+    }
+
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+
+    // Clamp to canvas
+    player.x = Math.max(playerRadius(), Math.min(W - playerRadius(), player.x));
+    player.y = Math.max(playerRadius(), Math.min(H - playerRadius(), player.y));
+
+    // --- Find nearby people ---
+    var nearby = [];
+    for (var i = 0; i < people.length; i++) {
+      var dd = dist(player.x, player.y, people[i].x, people[i].y);
+      if (dd < pr) nearby.push({ i: i, d: dd });
+    }
+    var alone = nearby.length === 0;
+
+    // --- Novelty ---
+    for (var j = 0; j < nearby.length; j++) {
+      var p = people[nearby[j].i];
+      var prox = 1 - nearby[j].d / pr;
+      var take = 0.7 * prox * dt;
+      if (p.noveltyLeft > 0) {
+        var taken = Math.min(take, p.noveltyLeft);
+        p.noveltyLeft -= taken;
+        noveltyBar = Math.min(1, noveltyBar + taken * 0.055);
+      }
+    }
+    // Slow natural decay
+    noveltyBar = Math.max(0, noveltyBar - 0.002 * dt);
+
+    // --- Connection ---
+    var connThreshold = 0.45;
+    for (var j = 0; j < nearby.length; j++) {
+      var p = people[nearby[j].i];
+      var prox = 1 - nearby[j].d / pr;
+
+      if (o > connThreshold && energyBar > 0.02) {
+        var rate = 0.22 * prox * (o - connThreshold + 0.05) * dt;
+        p.conn = Math.min(p.cap, p.conn + rate);
+      }
+    }
+
+    // Connection decay for distant people
+    for (var i = 0; i < people.length; i++) {
+      var dd = dist(player.x, player.y, people[i].x, people[i].y);
+      if (dd > pr * 1.5) {
+        people[i].conn = Math.max(0, people[i].conn - 0.015 * dt);
+      }
+    }
+
+    // Connection bar = mean of top 4 connections
+    var sorted = [];
+    for (var i = 0; i < people.length; i++) sorted.push(people[i].conn);
+    sorted.sort(function(a, b) { return b - a; });
+    var topN = 4;
+    var cSum = 0;
+    for (var i = 0; i < topN && i < sorted.length; i++) cSum += sorted[i];
+    connectionBar = cSum / topN;
+
+    // --- Energy ---
+    if (alone) {
+      energyBar = Math.min(1, energyBar + 0.06 * dt);
+    } else {
+      var drain = 0;
+      for (var j = 0; j < nearby.length; j++) {
+        var p = people[nearby[j].i];
+        var prox = 1 - nearby[j].d / pr;
+
+        if (o > 0.25) {
+          // Open + low connection = heavy drain
+          // Open + high connection = low drain or slight gain
+          var connBenefit = p.conn * 1.3;
+          var personDrain = o * Math.max(0, 1 - connBenefit) * prox;
+          drain += personDrain;
+          // Slight energy gain from high-connection people
+          if (p.conn > 0.5) {
+            drain -= p.conn * 0.15 * prox * o;
+          }
+        } else {
+          // Low openness = mild performing drain
+          drain += 0.08 * prox;
+        }
+      }
+      energyBar = Math.max(0, Math.min(1, energyBar - drain * 0.08 * dt));
+    }
+
+    // When energy is depleted, force openness slider down visually
+    // (we don't actually move it — but effective openness is clamped)
+  }
+
+  // --- Rendering ---
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function drawPeople(time) {
+    var pr = proxRadius();
+    var pRad = personRadius();
+
+    for (var i = 0; i < people.length; i++) {
+      var p = people[i];
+      var t = Math.min(1, p.conn / 0.7);
+
+      // Color: gray -> blue
+      var r = Math.round(lerp(100, 80, t));
+      var g = Math.round(lerp(100, 130, t));
+      var b = Math.round(lerp(100, 255, t));
+
+      // Subtle breathing animation
+      var breath = Math.sin(time * p.breathSpeed + p.phase) * 0.08;
+      var rad = pRad * (1 + breath);
+
+      // Outer glow for connected people
+      if (t > 0.1) {
+        var glowRad = rad + 3 + t * 8;
+        var grd = ctx.createRadialGradient(p.x, p.y, rad, p.x, p.y, glowRad);
+        grd.addColorStop(0, 'rgba(' + r + ',' + g + ',' + b + ',' + (t * 0.25) + ')');
+        grd.addColorStop(1, 'rgba(' + r + ',' + g + ',' + b + ',0)');
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, glowRad, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+      }
+
+      // Core circle
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      ctx.fill();
+    }
+  }
+
+  function drawPlayer() {
+    var o = openness();
+    var pr = proxRadius();
+    var pRad = playerRadius();
+
+    // Proximity field
+    var alpha = 0.03 + o * 0.07;
+    var grd = ctx.createRadialGradient(
+      player.x, player.y, pRad * 0.8,
+      player.x, player.y, pr
+    );
+    grd.addColorStop(0, 'rgba(77, 204, 119, ' + (alpha * 1.2) + ')');
+    grd.addColorStop(0.5, 'rgba(77, 204, 119, ' + (alpha * 0.5) + ')');
+    grd.addColorStop(1, 'rgba(77, 204, 119, 0)');
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, pr, 0, Math.PI * 2);
+    ctx.fillStyle = grd;
+    ctx.fill();
+
+    // Proximity ring
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, pr, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(77, 204, 119, ' + (0.04 + o * 0.1) + ')';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Player circle
+    var eFade = 0.35 + energyBar * 0.65;
+    var green = Math.round(170 + energyBar * 85);
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, pRad, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(77, ' + green + ', 119, ' + eFade + ')';
+    ctx.fill();
+
+    // Edge highlight
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, pRad, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(120, ' + green + ', 140, ' + (0.4 + energyBar * 0.3) + ')';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Inner bright spot
+    ctx.beginPath();
+    ctx.arc(player.x - pRad * 0.25, player.y - pRad * 0.25, pRad * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(200, 255, 220, ' + (0.1 + energyBar * 0.15) + ')';
+    ctx.fill();
+  }
+
+  function drawBars() {
+    var barW = 5;
+    var barH = Math.min(90, H * 0.12);
+    var gap = 8;
+    var mr = Math.min(24, W * 0.04);
+    var mt = Math.min(24, H * 0.03);
+    var cr = 2.5;
+
+    var bars = [
+      { val: noveltyBar, color: [130, 130, 130] },     // gray
+      { val: connectionBar, color: [107, 138, 255] },   // blue
+      { val: energyBar, color: [77, 204, 119] },        // green
+    ];
+
+    for (var i = 0; i < bars.length; i++) {
+      var bx = W - mr - barW - (2 - i) * (barW + gap);
+      var by = mt;
+
+      // Background
+      ctx.beginPath();
+      ctx.roundRect(bx, by, barW, barH, cr);
+      ctx.fillStyle = '#111';
+      ctx.fill();
+
+      // Fill
+      var fh = barH * bars[i].val;
+      if (fh > 0.5) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(bx, by, barW, barH, cr);
+        ctx.clip();
+
+        var c = bars[i].color;
+        // Gradient fill
+        var grd = ctx.createLinearGradient(bx, by + barH, bx, by + barH - fh);
+        grd.addColorStop(0, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ', 0.6)');
+        grd.addColorStop(1, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ', 1)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(bx, by + barH - fh, barW, fh);
+
+        ctx.restore();
+      }
+    }
+  }
+
+  function render(time) {
+    ctx.clearRect(0, 0, W, H);
+    drawPeople(time / 1000);
+    drawPlayer();
+    drawBars();
+  }
+
+  // --- Slider visual feedback ---
+  function updateSliderTrack() {
+    var o = openness();
+    var t = o;
+    // Dark to subtly warm purple
+    var r = Math.round(26 + t * 50);
+    var g = Math.round(26 + t * 10);
+    var b = Math.round(26 + t * 55);
+    slider.style.background = 'linear-gradient(90deg, #1a1a1a, rgb(' + r + ',' + g + ',' + b + '))';
+  }
+  slider.addEventListener('input', updateSliderTrack);
+
+  // --- Main loop ---
+  function loop(time) {
+    var dt = lastTime ? (time - lastTime) / 1000 : 1 / 60;
+    lastTime = time;
+
+    update(dt);
+    render(time);
+    requestAnimationFrame(loop);
+  }
+
+  // --- roundRect polyfill (path-only, no beginPath) ---
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (typeof r === 'number') r = [r, r, r, r];
+      this.moveTo(x + r[0], y);
+      this.lineTo(x + w - r[1], y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r[1]);
+      this.lineTo(x + w, y + h - r[2]);
+      this.quadraticCurveTo(x + w, y + h, x + w - r[2], y + h);
+      this.lineTo(x + r[3], y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r[3]);
+      this.lineTo(x, y + r[0]);
+      this.quadraticCurveTo(x, y, x + r[0], y);
+      this.closePath();
+    };
+  }
+
+  // --- Init ---
+  resize();
+  window.addEventListener('resize', resize);
+  generateWorld();
+  updateSliderTrack();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
