@@ -530,36 +530,46 @@
       // Color: gray -> blue based on compatibility, modulated by reveal
       var connGlow = Math.min(1, p.conn / 0.7);
 
-      // Remap compatibility for stronger visual contrast
-      // compat ranges from 0.5 (least compatible, value=0 or 1) to 1.0 (most, value=0.5)
-      // Remap to 0-1 scale where low compat is clearly gray, high is clearly blue
+      // Remap compatibility for visual contrast
+      // compat ranges from 0.5 (least compatible) to 1.0 (most compatible)
+      // Remap to 0-1 scale
       var compatVis = Math.max(0, (compat - 0.5) * 2); // 0-1 remapped
-      compatVis = compatVis * compatVis; // square for more contrast — low stays gray
 
-      // Base gray (with slight warm tint for low compat)
-      var gr = 100, gg = 100, gb = 100;
-      // Low compat: slightly reddish gray
-      var lr = 120, lg = 90, lb = 85;
-      // High compat: blue
-      var hr = 70, hg = 150, hb = 255;
+      // Color: red (incompatible) → gray (neutral) → green (compatible)
+      // Low compat (0): red-ish [200, 70, 70]
+      // Mid compat (0.5): gray [110, 110, 110]
+      // High compat (1): green [77, 210, 120]
+      var r, g, b;
+      if (compatVis < 0.5) {
+        // Red → gray
+        var t2 = compatVis * 2; // 0-1 within this half
+        r = Math.round(lerp(200, 110, t2));
+        g = Math.round(lerp(70, 110, t2));
+        b = Math.round(lerp(70, 110, t2));
+      } else {
+        // Gray → green
+        var t2 = (compatVis - 0.5) * 2; // 0-1 within this half
+        r = Math.round(lerp(110, 77, t2));
+        g = Math.round(lerp(110, 210, t2));
+        b = Math.round(lerp(110, 120, t2));
+      }
 
-      // Blend: gray/warm → blue based on compatVis, modulated by reveal
-      var colorT = reveal * compatVis;
-      var warmT = reveal * (1 - compatVis) * 0.4; // slight warm tint for incompatible
-      var r = Math.round(lerp(lerp(gr, lr, warmT), hr, colorT));
-      var g = Math.round(lerp(lerp(gg, lg, warmT), hg, colorT));
-      var b = Math.round(lerp(lerp(gb, lb, warmT), hb, colorT));
+      // Modulate by reveal — unrevealed dots stay gray
+      var baseGray = 100;
+      r = Math.round(lerp(baseGray, r, reveal));
+      g = Math.round(lerp(baseGray, g, reveal));
+      b = Math.round(lerp(baseGray, b, reveal));
 
       // Breathing
       var breath = Math.sin(time * p.breathSpeed + p.phase) * 0.06;
       var rad = pRad * (1 + breath);
 
-      // Connection glow
+      // Connection glow — green
       if (connGlow > 0.08) {
         var glowRad = rad + 2 + connGlow * 8;
         var grd = ctx.createRadialGradient(p.x, p.y, rad, p.x, p.y, glowRad);
-        grd.addColorStop(0, 'rgba(107, 148, 255, ' + (connGlow * 0.3) + ')');
-        grd.addColorStop(1, 'rgba(107, 148, 255, 0)');
+        grd.addColorStop(0, 'rgba(77, 210, 120, ' + (connGlow * 0.3) + ')');
+        grd.addColorStop(1, 'rgba(77, 210, 120, 0)');
         ctx.beginPath();
         ctx.arc(p.x, p.y, glowRad, 0, Math.PI * 2);
         ctx.fillStyle = grd;
@@ -579,24 +589,24 @@
     var pr = proxRadius();
     var pRad = playerRadius();
 
-    // Proximity field glow
+    // Proximity field glow — blue
     var alpha = 0.03 + o * 0.07;
     var grd = ctx.createRadialGradient(
       player.x, player.y, pRad * 0.8,
       player.x, player.y, pr
     );
-    grd.addColorStop(0, 'rgba(77, 204, 119, ' + (alpha * 1.2) + ')');
-    grd.addColorStop(0.5, 'rgba(77, 204, 119, ' + (alpha * 0.5) + ')');
-    grd.addColorStop(1, 'rgba(77, 204, 119, 0)');
+    grd.addColorStop(0, 'rgba(90, 140, 255, ' + (alpha * 1.2) + ')');
+    grd.addColorStop(0.5, 'rgba(90, 140, 255, ' + (alpha * 0.5) + ')');
+    grd.addColorStop(1, 'rgba(90, 140, 255, 0)');
     ctx.beginPath();
     ctx.arc(player.x, player.y, pr, 0, Math.PI * 2);
     ctx.fillStyle = grd;
     ctx.fill();
 
-    // Proximity ring
+    // Proximity ring — blue
     ctx.beginPath();
     ctx.arc(player.x, player.y, pr, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(77, 204, 119, ' + (0.04 + o * 0.1) + ')';
+    ctx.strokeStyle = 'rgba(90, 140, 255, ' + (0.04 + o * 0.1) + ')';
     ctx.lineWidth = 1;
     ctx.stroke();
 
@@ -604,25 +614,25 @@
     var breath = Math.sin(time * 0.6) * 0.05;
     var rad = pRad * (1 + breath);
 
-    // Player circle
+    // Player circle — blue
     var eFade = 0.35 + energyBar * 0.65;
-    var green = Math.round(170 + energyBar * 85);
+    var blue = Math.round(180 + energyBar * 75);
     ctx.beginPath();
     ctx.arc(player.x, player.y, rad, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(77, ' + green + ', 119, ' + eFade + ')';
+    ctx.fillStyle = 'rgba(80, 130, ' + blue + ', ' + eFade + ')';
     ctx.fill();
 
-    // Edge highlight
+    // Edge highlight — blue
     ctx.beginPath();
     ctx.arc(player.x, player.y, rad, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(120, ' + green + ', 140, ' + (0.4 + energyBar * 0.3) + ')';
+    ctx.strokeStyle = 'rgba(100, 150, ' + blue + ', ' + (0.4 + energyBar * 0.3) + ')';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
     // Inner bright spot
     ctx.beginPath();
     ctx.arc(player.x - rad * 0.25, player.y - rad * 0.25, rad * 0.35, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(200, 255, 220, ' + (0.1 + energyBar * 0.15) + ')';
+    ctx.fillStyle = 'rgba(200, 220, 255, ' + (0.1 + energyBar * 0.15) + ')';
     ctx.fill();
   }
 
@@ -635,9 +645,9 @@
     var cr = 2.5;
 
     var bars = [
-      { val: noveltyBar, color: [130, 130, 130] },
-      { val: connectionBar, color: [107, 138, 255] },
-      { val: energyBar, color: [77, 204, 119] },
+      { val: noveltyBar, color: [130, 130, 130] },     // gray — novelty
+      { val: connectionBar, color: [77, 210, 120] },   // green — connection
+      { val: energyBar, color: [90, 140, 255] },        // blue — energy
     ];
 
     for (var i = 0; i < bars.length; i++) {
