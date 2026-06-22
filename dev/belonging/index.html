@@ -103,79 +103,65 @@
     canvas.width = W * dpr;
     canvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (people.length) repositionPeople();
   }
 
-  // --- Scaling helpers ---
-  function proxRadius() { return minDim * 0.12; }
+  // --- Scaling (match CTRL dot sizes) ---
   function personRadius() { return Math.max(5, minDim * 0.012); }
-  function playerRadius() { return Math.max(7, minDim * 0.016); }
-  function clusterSpread() { return Math.max(18, minDim * 0.035); }
+  function playerRadius() { return Math.max(5, minDim * 0.014); }
+  function proxRadius() { return minDim * 0.12; }
 
   // --- State ---
   var noveltyBar = 0;
   var connectionBar = 0;
   var energyBar = 1;
 
-  var player = { x: 0, y: 0, tx: 0, ty: 0, vx: 0, vy: 0 };
+  var player = { x: 0, y: 0, tx: 0, ty: 0, vx: 0, vy: 0, value: 0.5 };
   var people = [];
+  var NUM_PEOPLE = 35;
 
   function openness() { return slider.value / 100; }
 
-  // --- Cluster definitions (normalized 0-1) ---
-  var clusterDefs = [
-    { cx: 0.14, cy: 0.18, n: 5 },
-    { cx: 0.78, cy: 0.14, n: 4 },
-    { cx: 0.48, cy: 0.42, n: 6 },
-    { cx: 0.18, cy: 0.72, n: 4 },
-    { cx: 0.82, cy: 0.58, n: 7 },
-    { cx: 0.52, cy: 0.82, n: 3 },
-  ];
-
-  // Seeded pseudo-random for deterministic layout
-  var seed = 42;
+  // --- Seeded RNG ---
+  var seed = 71;
   function srand() {
     seed = (seed * 16807 + 0) % 2147483647;
     return (seed - 1) / 2147483646;
   }
 
+  function compatibility(a, b) {
+    return 1 - Math.abs(a.value - b.value);
+  }
+
   function generateWorld() {
-    seed = 42;
+    seed = 71;
     people = [];
 
-    for (var c = 0; c < clusterDefs.length; c++) {
-      var def = clusterDefs[c];
-      for (var i = 0; i < def.n; i++) {
-        var angle = (Math.PI * 2 * i / def.n) + (srand() * 0.6 - 0.3);
-        var dist = clusterSpread() * (0.6 + srand() * 0.5);
+    for (var i = 0; i < NUM_PEOPLE; i++) {
+      var val = srand();
+      var spd = 0.2 + srand() * 0.8;
 
-        // ~30% of people can connect deeply
-        var canConnect = srand() < 0.30;
-        var cap = canConnect
-          ? 0.55 + srand() * 0.45  // 0.55-1.0
-          : 0.03 + srand() * 0.12; // 0.03-0.15
-
-        people.push({
-          nx: def.cx, ny: def.cy,  // normalized cluster center
-          angle: angle,
-          distFrac: dist / clusterSpread(),
-          x: 0, y: 0,
-          conn: 0,
-          cap: cap,
-          noveltyLeft: 1.0,
-          cluster: c,
-          // Subtle idle animation offset
-          phase: srand() * Math.PI * 2,
-          breathSpeed: 0.3 + srand() * 0.4
-        });
-      }
+      people.push({
+        x: 0.1 * W + srand() * 0.8 * W,
+        y: 0.1 * H + srand() * 0.8 * H,
+        vx: 0,
+        vy: 0,
+        value: val,
+        speed: spd,
+        conn: 0,
+        noveltyLeft: 1.0,
+        revealAlpha: 0,       // how much color is revealed (0=gray, 1=full)
+        seenTint: 0,          // faint residual tint after seeing
+        phase: srand() * Math.PI * 2,
+        breathSpeed: 0.4 + srand() * 0.5,
+        // Random walk state
+        walkAngle: srand() * Math.PI * 2,
+        walkTimer: srand() * 3
+      });
     }
 
-    repositionPeople();
-
-    // Player starts in open space between clusters
-    player.x = W * 0.38;
-    player.y = H * 0.28;
+    // Player starts near center
+    player.x = W * 0.5 + (srand() - 0.5) * W * 0.1;
+    player.y = H * 0.45 + (srand() - 0.5) * H * 0.1;
     player.tx = player.x;
     player.ty = player.y;
     player.vx = 0;
@@ -186,13 +172,10 @@
     energyBar = 1;
   }
 
-  function repositionPeople() {
-    var spread = clusterSpread();
-    for (var i = 0; i < people.length; i++) {
-      var p = people[i];
-      p.x = p.nx * W + Math.cos(p.angle) * p.distFrac * spread;
-      p.y = p.ny * H + Math.sin(p.angle) * p.distFrac * spread;
-    }
+  // --- Distance helper ---
+  function dist(ax, ay, bx, by) {
+    var dx = ax - bx, dy = ay - by;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   // --- Input ---
@@ -216,30 +199,131 @@
   canvas.addEventListener('pointerup', function() { dragging = false; });
   canvas.addEventListener('pointercancel', function() { dragging = false; });
 
-  // Prevent slider interaction from moving player
   slider.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
 
-  // --- Simulation ---
-  var lastTime = 0;
+  // --- Physics constants (tuned for gentle ~30s clustering) ---
+  var ATTRACT_STRENGTH = 0.04;
+  var REPEL_STRENGTH = 0.06;
+  var RANDOM_WALK_STRENGTH = 0.15;
+  var EDGE_REPULSION_STRENGTH = 0.4;
+  var OVERLAP_REPULSION = 1.5;
+  var FRICTION = 0.95;
+  var MAX_DOT_SPEED_PX; // set on resize
 
-  function dist(ax, ay, bx, by) {
-    var dx = ax - bx, dy = ay - by;
-    return Math.sqrt(dx * dx + dy * dy);
+  // --- Physics for all dots ---
+  function updatePhysics(dt) {
+    if (dt <= 0 || dt > 0.1) dt = 1 / 60;
+    MAX_DOT_SPEED_PX = minDim * 0.15;
+    var pRad = personRadius();
+    var minSep = pRad * 3; // minimum separation between dots
+
+    for (var i = 0; i < people.length; i++) {
+      var a = people[i];
+      var fx = 0, fy = 0;
+
+      // --- Inter-dot forces ---
+      for (var j = 0; j < people.length; j++) {
+        if (i === j) continue;
+        var b = people[j];
+        var dx = b.x - a.x;
+        var dy = b.y - a.y;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d < 1) d = 1;
+        var nx = dx / d;
+        var ny = dy / d;
+
+        var sim = 1 - Math.abs(a.value - b.value); // 0-1 similarity
+
+        // Short-range overlap repulsion (always)
+        if (d < minSep) {
+          var overlapForce = OVERLAP_REPULSION * (1 - d / minSep);
+          fx -= nx * overlapForce;
+          fy -= ny * overlapForce;
+        }
+
+        // Attraction between similar dots (long range, gentle)
+        if (sim > 0.5) {
+          var attractRange = minDim * 0.45;
+          if (d < attractRange && d > minSep) {
+            var strength = ATTRACT_STRENGTH * (sim - 0.5) * 2; // 0-1 scaled
+            // Inverse-ish distance — stronger when closer but not overlapping
+            var distFactor = Math.pow(1 - d / attractRange, 0.7);
+            fx += nx * strength * distFactor;
+            fy += ny * strength * distFactor;
+          }
+        }
+
+        // Repulsion between different dots (shorter range)
+        if (sim < 0.4) {
+          var repelRange = minDim * 0.22;
+          if (d < repelRange) {
+            var diff = (0.4 - sim) * 2.5; // 0-1 scaled
+            var distFactor = Math.pow(1 - d / repelRange, 0.7);
+            fx -= nx * REPEL_STRENGTH * diff * distFactor;
+            fy -= ny * REPEL_STRENGTH * diff * distFactor;
+          }
+        }
+      }
+
+      // --- Edge repulsion (soft boundary) ---
+      var edgeMargin = Math.max(W, H) * 0.1;
+      if (a.x < edgeMargin) {
+        fx += EDGE_REPULSION_STRENGTH * (1 - a.x / edgeMargin);
+      }
+      if (a.x > W - edgeMargin) {
+        fx -= EDGE_REPULSION_STRENGTH * (1 - (W - a.x) / edgeMargin);
+      }
+      if (a.y < edgeMargin) {
+        fy += EDGE_REPULSION_STRENGTH * (1 - a.y / edgeMargin);
+      }
+      if (a.y > H - edgeMargin) {
+        fy -= EDGE_REPULSION_STRENGTH * (1 - (H - a.y) / edgeMargin);
+      }
+
+      // --- Random walk (gentle drift) ---
+      a.walkTimer -= dt;
+      if (a.walkTimer <= 0) {
+        a.walkAngle += (Math.random() - 0.5) * Math.PI * 0.5;
+        a.walkTimer = 2 + Math.random() * 4;
+      }
+      // Smooth the walk angle into force rather than snapping
+      fx += Math.cos(a.walkAngle) * RANDOM_WALK_STRENGTH * a.speed;
+      fy += Math.sin(a.walkAngle) * RANDOM_WALK_STRENGTH * a.speed;
+
+      // --- Apply forces ---
+      a.vx += fx * dt * 60;
+      a.vy += fy * dt * 60;
+
+      // Speed limit based on dot's speed attribute
+      var maxSpd = MAX_DOT_SPEED_PX * a.speed;
+      var spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+      if (spd > maxSpd) {
+        a.vx *= maxSpd / spd;
+        a.vy *= maxSpd / spd;
+      }
+
+      // Friction
+      a.vx *= FRICTION;
+      a.vy *= FRICTION;
+
+      // Integrate
+      a.x += a.vx * dt;
+      a.y += a.vy * dt;
+
+      // Hard clamp (safety net — edge repulsion should handle it)
+      a.x = Math.max(pRad, Math.min(W - pRad, a.x));
+      a.y = Math.max(pRad, Math.min(H - pRad, a.y));
+    }
   }
 
-  function update(dt) {
+  // --- Player movement ---
+  function updatePlayer(dt) {
     if (dt <= 0 || dt > 0.1) dt = 1 / 60;
 
-    var o = openness();
-    var pr = proxRadius();
-
-    // --- Move player (spring-damped) ---
+    var energyMult = 0.3 + energyBar * 0.7;
     var dx = player.tx - player.x;
     var dy = player.ty - player.y;
     var d = Math.sqrt(dx * dx + dy * dy);
-
-    // Energy affects movement — sluggish when drained
-    var energyMult = 0.3 + energyBar * 0.7;
 
     if (d > 0.5) {
       var stiffness = 4.5 * energyMult;
@@ -247,8 +331,7 @@
       player.vx += (dx * stiffness - player.vx * damping) * dt;
       player.vy += (dy * stiffness - player.vy * damping) * dt;
 
-      // Limit max speed
-      var maxSpeed = minDim * 0.6 * energyMult;
+      var maxSpeed = minDim * 0.9 * energyMult; // 1.5x faster than max dot
       var speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
       if (speed > maxSpeed) {
         player.vx *= maxSpeed / speed;
@@ -262,9 +345,17 @@
     player.x += player.vx * dt;
     player.y += player.vy * dt;
 
-    // Clamp to canvas
-    player.x = Math.max(playerRadius(), Math.min(W - playerRadius(), player.x));
-    player.y = Math.max(playerRadius(), Math.min(H - playerRadius(), player.y));
+    var pr = playerRadius();
+    player.x = Math.max(pr, Math.min(W - pr, player.x));
+    player.y = Math.max(pr, Math.min(H - pr, player.y));
+  }
+
+  // --- Game logic ---
+  function updateGameLogic(dt) {
+    if (dt <= 0 || dt > 0.1) dt = 1 / 60;
+
+    var o = openness();
+    var pr = proxRadius();
 
     // --- Find nearby people ---
     var nearby = [];
@@ -274,6 +365,21 @@
     }
     var alone = nearby.length === 0;
 
+    // --- Reveal / hide compatibility color ---
+    for (var i = 0; i < people.length; i++) {
+      var p = people[i];
+      var dd = dist(player.x, player.y, p.x, p.y);
+      if (dd < pr) {
+        // Reveal — fade in
+        var prox = 1 - dd / pr;
+        p.revealAlpha = Math.min(1, p.revealAlpha + 2.5 * dt * prox);
+        p.seenTint = Math.max(p.seenTint, 0.15); // once seen, faint tint remains
+      } else {
+        // Fade out — but keep seenTint as floor
+        p.revealAlpha = Math.max(p.seenTint, p.revealAlpha - 0.8 * dt);
+      }
+    }
+
     // --- Novelty ---
     for (var j = 0; j < nearby.length; j++) {
       var p = people[nearby[j].i];
@@ -282,21 +388,22 @@
       if (p.noveltyLeft > 0) {
         var taken = Math.min(take, p.noveltyLeft);
         p.noveltyLeft -= taken;
-        noveltyBar = Math.min(1, noveltyBar + taken * 0.055);
+        noveltyBar = Math.min(1, noveltyBar + taken * 0.06);
       }
     }
-    // Slow natural decay
-    noveltyBar = Math.max(0, noveltyBar - 0.002 * dt);
+    noveltyBar = Math.max(0, noveltyBar - 0.003 * dt);
 
     // --- Connection ---
     var connThreshold = 0.45;
+    var compatThreshold = 0.3;
     for (var j = 0; j < nearby.length; j++) {
       var p = people[nearby[j].i];
       var prox = 1 - nearby[j].d / pr;
+      var compat = compatibility(player, p);
 
-      if (o > connThreshold && energyBar > 0.02) {
-        var rate = 0.22 * prox * (o - connThreshold + 0.05) * dt;
-        p.conn = Math.min(p.cap, p.conn + rate);
+      if (o > connThreshold && compat > compatThreshold && energyBar > 0.02) {
+        var rate = 0.18 * prox * compat * (o - connThreshold + 0.05) * dt;
+        p.conn = Math.min(compat, p.conn + rate); // capped by compatibility
       }
     }
 
@@ -304,7 +411,7 @@
     for (var i = 0; i < people.length; i++) {
       var dd = dist(player.x, player.y, people[i].x, people[i].y);
       if (dd > pr * 1.5) {
-        people[i].conn = Math.max(0, people[i].conn - 0.015 * dt);
+        people[i].conn = Math.max(0, people[i].conn - 0.012 * dt);
       }
     }
 
@@ -325,55 +432,62 @@
       for (var j = 0; j < nearby.length; j++) {
         var p = people[nearby[j].i];
         var prox = 1 - nearby[j].d / pr;
+        var compat = compatibility(player, p);
 
         if (o > 0.25) {
-          // Open + low connection = heavy drain
-          // Open + high connection = low drain or slight gain
+          // High openness + low compatibility = heavy drain
+          // High openness + high compatibility = low drain or slight gain
           var connBenefit = p.conn * 1.3;
-          var personDrain = o * Math.max(0, 1 - connBenefit) * prox;
+          var compatDrainMod = Math.max(0, 1 - compat * 1.2);
+          var personDrain = o * compatDrainMod * prox;
           drain += personDrain;
-          // Slight energy gain from high-connection people
-          if (p.conn > 0.5) {
-            drain -= p.conn * 0.15 * prox * o;
+          // Slight energy gain from high-connection high-compat people
+          if (p.conn > 0.4 && compat > 0.6) {
+            drain -= p.conn * 0.2 * prox * o;
           }
         } else {
           // Low openness = mild performing drain
           drain += 0.08 * prox;
         }
       }
-      energyBar = Math.max(0, Math.min(1, energyBar - drain * 0.08 * dt));
+      energyBar = Math.max(0, Math.min(1, energyBar - drain * 0.07 * dt));
     }
-
-    // When energy is depleted, force openness slider down visually
-    // (we don't actually move it — but effective openness is clamped)
   }
 
   // --- Rendering ---
   function lerp(a, b, t) { return a + (b - a) * t; }
 
   function drawPeople(time) {
-    var pr = proxRadius();
     var pRad = personRadius();
 
     for (var i = 0; i < people.length; i++) {
       var p = people[i];
-      var t = Math.min(1, p.conn / 0.7);
+      var compat = compatibility(player, p);
+      var reveal = p.revealAlpha;
 
-      // Color: gray -> blue
-      var r = Math.round(lerp(100, 80, t));
-      var g = Math.round(lerp(100, 130, t));
-      var b = Math.round(lerp(100, 255, t));
+      // Color: gray -> blue based on compatibility, modulated by reveal
+      var connGlow = Math.min(1, p.conn / 0.7);
 
-      // Subtle breathing animation
-      var breath = Math.sin(time * p.breathSpeed + p.phase) * 0.08;
+      // Base gray
+      var gr = 100, gg = 100, gb = 100;
+      // Compatibility color (blue)
+      var cr = 80, cg = 140, cb = 255;
+      // Blend based on reveal * compatibility
+      var colorT = reveal * compat;
+      var r = Math.round(lerp(gr, cr, colorT));
+      var g = Math.round(lerp(gg, cg, colorT));
+      var b = Math.round(lerp(gb, cb, colorT));
+
+      // Breathing
+      var breath = Math.sin(time * p.breathSpeed + p.phase) * 0.06;
       var rad = pRad * (1 + breath);
 
-      // Outer glow for connected people
-      if (t > 0.1) {
-        var glowRad = rad + 3 + t * 8;
+      // Connection glow
+      if (connGlow > 0.08) {
+        var glowRad = rad + 2 + connGlow * 8;
         var grd = ctx.createRadialGradient(p.x, p.y, rad, p.x, p.y, glowRad);
-        grd.addColorStop(0, 'rgba(' + r + ',' + g + ',' + b + ',' + (t * 0.25) + ')');
-        grd.addColorStop(1, 'rgba(' + r + ',' + g + ',' + b + ',0)');
+        grd.addColorStop(0, 'rgba(107, 148, 255, ' + (connGlow * 0.3) + ')');
+        grd.addColorStop(1, 'rgba(107, 148, 255, 0)');
         ctx.beginPath();
         ctx.arc(p.x, p.y, glowRad, 0, Math.PI * 2);
         ctx.fillStyle = grd;
@@ -388,12 +502,12 @@
     }
   }
 
-  function drawPlayer() {
+  function drawPlayer(time) {
     var o = openness();
     var pr = proxRadius();
     var pRad = playerRadius();
 
-    // Proximity field
+    // Proximity field glow
     var alpha = 0.03 + o * 0.07;
     var grd = ctx.createRadialGradient(
       player.x, player.y, pRad * 0.8,
@@ -414,24 +528,28 @@
     ctx.lineWidth = 1;
     ctx.stroke();
 
+    // Player breathing
+    var breath = Math.sin(time * 0.6) * 0.05;
+    var rad = pRad * (1 + breath);
+
     // Player circle
     var eFade = 0.35 + energyBar * 0.65;
     var green = Math.round(170 + energyBar * 85);
     ctx.beginPath();
-    ctx.arc(player.x, player.y, pRad, 0, Math.PI * 2);
+    ctx.arc(player.x, player.y, rad, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(77, ' + green + ', 119, ' + eFade + ')';
     ctx.fill();
 
     // Edge highlight
     ctx.beginPath();
-    ctx.arc(player.x, player.y, pRad, 0, Math.PI * 2);
+    ctx.arc(player.x, player.y, rad, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(120, ' + green + ', 140, ' + (0.4 + energyBar * 0.3) + ')';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
     // Inner bright spot
     ctx.beginPath();
-    ctx.arc(player.x - pRad * 0.25, player.y - pRad * 0.25, pRad * 0.35, 0, Math.PI * 2);
+    ctx.arc(player.x - rad * 0.25, player.y - rad * 0.25, rad * 0.35, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(200, 255, 220, ' + (0.1 + energyBar * 0.15) + ')';
     ctx.fill();
   }
@@ -445,9 +563,9 @@
     var cr = 2.5;
 
     var bars = [
-      { val: noveltyBar, color: [130, 130, 130] },     // gray
-      { val: connectionBar, color: [107, 138, 255] },   // blue
-      { val: energyBar, color: [77, 204, 119] },        // green
+      { val: noveltyBar, color: [130, 130, 130] },
+      { val: connectionBar, color: [107, 138, 255] },
+      { val: energyBar, color: [77, 204, 119] },
     ];
 
     for (var i = 0; i < bars.length; i++) {
@@ -469,7 +587,6 @@
         ctx.clip();
 
         var c = bars[i].color;
-        // Gradient fill
         var grd = ctx.createLinearGradient(bx, by + barH, bx, by + barH - fh);
         grd.addColorStop(0, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ', 0.6)');
         grd.addColorStop(1, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ', 1)');
@@ -484,33 +601,21 @@
   function render(time) {
     ctx.clearRect(0, 0, W, H);
     drawPeople(time / 1000);
-    drawPlayer();
+    drawPlayer(time / 1000);
     drawBars();
   }
 
   // --- Slider visual feedback ---
   function updateSliderTrack() {
     var o = openness();
-    var t = o;
-    // Dark to subtly warm purple
-    var r = Math.round(26 + t * 50);
-    var g = Math.round(26 + t * 10);
-    var b = Math.round(26 + t * 55);
+    var r = Math.round(26 + o * 50);
+    var g = Math.round(26 + o * 10);
+    var b = Math.round(26 + o * 55);
     slider.style.background = 'linear-gradient(90deg, #1a1a1a, rgb(' + r + ',' + g + ',' + b + '))';
   }
   slider.addEventListener('input', updateSliderTrack);
 
-  // --- Main loop ---
-  function loop(time) {
-    var dt = lastTime ? (time - lastTime) / 1000 : 1 / 60;
-    lastTime = time;
-
-    update(dt);
-    render(time);
-    requestAnimationFrame(loop);
-  }
-
-  // --- roundRect polyfill (path-only, no beginPath) ---
+  // --- roundRect polyfill ---
   if (!CanvasRenderingContext2D.prototype.roundRect) {
     CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
       if (typeof r === 'number') r = [r, r, r, r];
@@ -527,9 +632,26 @@
     };
   }
 
+  // --- Main loop ---
+  var lastTime = 0;
+
+  function loop(time) {
+    var dt = lastTime ? (time - lastTime) / 1000 : 1 / 60;
+    lastTime = time;
+    if (dt > 0.1) dt = 0.1;
+
+    updatePhysics(dt);
+    updatePlayer(dt);
+    updateGameLogic(dt);
+    render(time);
+    requestAnimationFrame(loop);
+  }
+
   // --- Init ---
   resize();
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', function() {
+    resize();
+  });
   generateWorld();
   updateSliderTrack();
   requestAnimationFrame(loop);
