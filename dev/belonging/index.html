@@ -132,28 +132,64 @@
     return 1 - Math.abs(a.value - b.value);
   }
 
+  // 5 archetype centers — player is 0.5, compatible with group 3
+  var ARCHETYPES = [0.08, 0.28, 0.5, 0.72, 0.92];
+  var ARCHETYPE_NOISE = 0.06; // ± noise around center
+  var NUM_STRAYS = 4; // truly random dots that don't belong
+
   function generateWorld() {
     seed = 71;
     people = [];
 
-    for (var i = 0; i < NUM_PEOPLE; i++) {
-      var val = srand();
-      var spd = 0.2 + srand() * 0.8;
+    // Assign dots to archetypes: ~6 per group + strays
+    var dotsPerGroup = Math.floor((NUM_PEOPLE - NUM_STRAYS) / ARCHETYPES.length);
 
+    for (var g = 0; g < ARCHETYPES.length; g++) {
+      var count = (g === ARCHETYPES.length - 1)
+        ? (NUM_PEOPLE - NUM_STRAYS - g * dotsPerGroup)
+        : dotsPerGroup;
+      for (var i = 0; i < count; i++) {
+        var val = ARCHETYPES[g] + (srand() - 0.5) * ARCHETYPE_NOISE * 2;
+        val = Math.max(0, Math.min(1, val));
+        // Social capacity: how many nearby people they want (2-7)
+        // High = gravitates to center of cluster, low = edges/periphery
+        var socCap = 2 + Math.floor(srand() * 6);
+        people.push({
+          x: 0.1 * W + srand() * 0.8 * W,
+          y: 0.1 * H + srand() * 0.8 * H,
+          vx: 0, vy: 0,
+          value: val,
+          socialCap: socCap,
+          archetype: g,
+          conn: 0,
+          noveltyLeft: 1.0,
+          revealAlpha: 0,
+          seenTint: 0,
+          phase: srand() * Math.PI * 2,
+          breathSpeed: 0.4 + srand() * 0.5,
+          walkAngle: srand() * Math.PI * 2,
+          walkTimer: srand() * 3
+        });
+      }
+    }
+
+    // Strays — truly random values
+    for (var i = 0; i < NUM_STRAYS; i++) {
+      var val = srand();
+      var socCap = 1 + Math.floor(srand() * 3); // strays are less social (1-3)
       people.push({
         x: 0.1 * W + srand() * 0.8 * W,
         y: 0.1 * H + srand() * 0.8 * H,
-        vx: 0,
-        vy: 0,
+        vx: 0, vy: 0,
         value: val,
-        speed: spd,
+        socialCap: socCap,
+        archetype: -1,
         conn: 0,
         noveltyLeft: 1.0,
-        revealAlpha: 0,       // how much color is revealed (0=gray, 1=full)
-        seenTint: 0,          // faint residual tint after seeing
+        revealAlpha: 0,
+        seenTint: 0,
         phase: srand() * Math.PI * 2,
         breathSpeed: 0.4 + srand() * 0.5,
-        // Random walk state
         walkAngle: srand() * Math.PI * 2,
         walkTimer: srand() * 3
       });
@@ -201,10 +237,10 @@
 
   slider.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
 
-  // --- Physics constants (tuned for gentle ~30s clustering) ---
-  var ATTRACT_STRENGTH = 0.04;
-  var REPEL_STRENGTH = 0.06;
-  var RANDOM_WALK_STRENGTH = 0.15;
+  // --- Physics constants (tuned for 5 distinct clusters + strays) ---
+  var ATTRACT_STRENGTH = 0.06;
+  var REPEL_STRENGTH = 0.05;
+  var RANDOM_WALK_STRENGTH = 0.12;
   var EDGE_REPULSION_STRENGTH = 0.4;
   var OVERLAP_REPULSION = 1.5;
   var FRICTION = 0.95;
@@ -220,6 +256,19 @@
     for (var i = 0; i < people.length; i++) {
       var a = people[i];
       var fx = 0, fy = 0;
+
+      // Count similar neighbors for social capacity check
+      var similarNearby = 0;
+      var socialRange = minDim * 0.12;
+      for (var k = 0; k < people.length; k++) {
+        if (k === i) continue;
+        var sim2 = 1 - Math.abs(a.value - people[k].value);
+        if (sim2 > 0.85 && dist(a.x, a.y, people[k].x, people[k].y) < socialRange) {
+          similarNearby++;
+        }
+      }
+      // How "full" is this dot's social capacity? >1 means oversaturated
+      var socialFullness = similarNearby / a.socialCap;
 
       // --- Inter-dot forces ---
       for (var j = 0; j < people.length; j++) {
@@ -241,23 +290,34 @@
           fy -= ny * overlapForce;
         }
 
-        // Attraction between similar dots (long range, gentle)
-        if (sim > 0.5) {
-          var attractRange = minDim * 0.45;
+        // Attraction: only between very similar dots (same archetype)
+        if (sim > 0.85) {
+          var attractRange = minDim * 0.5;
           if (d < attractRange && d > minSep) {
-            var strength = ATTRACT_STRENGTH * (sim - 0.5) * 2; // 0-1 scaled
-            // Inverse-ish distance — stronger when closer but not overlapping
-            var distFactor = Math.pow(1 - d / attractRange, 0.7);
-            fx += nx * strength * distFactor;
-            fy += ny * strength * distFactor;
+            var strength = ATTRACT_STRENGTH * (sim - 0.85) / 0.15;
+            // Social capacity modulates attraction:
+            // Under-saturated: full attraction
+            // Over-saturated: attraction drops to zero, mild repulsion
+            var socialMod = Math.max(0, 1 - socialFullness);
+            strength *= socialMod;
+            // If oversaturated, gently push away same-type dots
+            if (socialFullness > 1.0 && d < socialRange) {
+              var pushback = 0.02 * (socialFullness - 1.0);
+              fx -= nx * pushback;
+              fy -= ny * pushback;
+            } else {
+              var distFactor = Math.pow(1 - d / attractRange, 0.7);
+              fx += nx * strength * distFactor;
+              fy += ny * strength * distFactor;
+            }
           }
         }
 
-        // Repulsion between different dots (shorter range)
-        if (sim < 0.4) {
-          var repelRange = minDim * 0.22;
+        // Repulsion between different dots (different archetypes)
+        if (sim < 0.7) {
+          var repelRange = minDim * 0.25;
           if (d < repelRange) {
-            var diff = (0.4 - sim) * 2.5; // 0-1 scaled
+            var diff = (0.7 - sim) / 0.7;
             var distFactor = Math.pow(1 - d / repelRange, 0.7);
             fx -= nx * REPEL_STRENGTH * diff * distFactor;
             fy -= ny * REPEL_STRENGTH * diff * distFactor;
@@ -287,15 +347,17 @@
         a.walkTimer = 2 + Math.random() * 4;
       }
       // Smooth the walk angle into force rather than snapping
-      fx += Math.cos(a.walkAngle) * RANDOM_WALK_STRENGTH * a.speed;
-      fy += Math.sin(a.walkAngle) * RANDOM_WALK_STRENGTH * a.speed;
+      // Less social dots wander more (they're not anchored to big groups)
+      var wanderMod = 0.5 + (1 - a.socialCap / 7) * 0.8;
+      fx += Math.cos(a.walkAngle) * RANDOM_WALK_STRENGTH * wanderMod;
+      fy += Math.sin(a.walkAngle) * RANDOM_WALK_STRENGTH * wanderMod;
 
       // --- Apply forces ---
       a.vx += fx * dt * 60;
       a.vy += fy * dt * 60;
 
-      // Speed limit based on dot's speed attribute
-      var maxSpd = MAX_DOT_SPEED_PX * a.speed;
+      // Speed limit — less social dots move slightly faster (less anchored)
+      var maxSpd = MAX_DOT_SPEED_PX * (0.4 + wanderMod * 0.6);
       var spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
       if (spd > maxSpd) {
         a.vx *= maxSpd / spd;
@@ -468,15 +530,25 @@
       // Color: gray -> blue based on compatibility, modulated by reveal
       var connGlow = Math.min(1, p.conn / 0.7);
 
-      // Base gray
+      // Remap compatibility for stronger visual contrast
+      // compat ranges from 0.5 (least compatible, value=0 or 1) to 1.0 (most, value=0.5)
+      // Remap to 0-1 scale where low compat is clearly gray, high is clearly blue
+      var compatVis = Math.max(0, (compat - 0.5) * 2); // 0-1 remapped
+      compatVis = compatVis * compatVis; // square for more contrast — low stays gray
+
+      // Base gray (with slight warm tint for low compat)
       var gr = 100, gg = 100, gb = 100;
-      // Compatibility color (blue)
-      var cr = 80, cg = 140, cb = 255;
-      // Blend based on reveal * compatibility
-      var colorT = reveal * compat;
-      var r = Math.round(lerp(gr, cr, colorT));
-      var g = Math.round(lerp(gg, cg, colorT));
-      var b = Math.round(lerp(gb, cb, colorT));
+      // Low compat: slightly reddish gray
+      var lr = 120, lg = 90, lb = 85;
+      // High compat: blue
+      var hr = 70, hg = 150, hb = 255;
+
+      // Blend: gray/warm → blue based on compatVis, modulated by reveal
+      var colorT = reveal * compatVis;
+      var warmT = reveal * (1 - compatVis) * 0.4; // slight warm tint for incompatible
+      var r = Math.round(lerp(lerp(gr, lr, warmT), hr, colorT));
+      var g = Math.round(lerp(lerp(gg, lg, warmT), hg, colorT));
+      var b = Math.round(lerp(lerp(gb, lb, warmT), hb, colorT));
 
       // Breathing
       var breath = Math.sin(time * p.breathSpeed + p.phase) * 0.06;
