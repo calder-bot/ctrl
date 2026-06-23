@@ -238,9 +238,9 @@
   slider.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
 
   // --- Physics constants (tuned for 5 distinct clusters + strays) ---
-  var ATTRACT_STRENGTH = 0.06;
-  var REPEL_STRENGTH = 0.05;
-  var RANDOM_WALK_STRENGTH = 0.12;
+  var ATTRACT_STRENGTH = 0.14;
+  var REPEL_STRENGTH = 0.12;
+  var RANDOM_WALK_STRENGTH = 0.08;
   var EDGE_REPULSION_STRENGTH = 0.4;
   var OVERLAP_REPULSION = 1.5;
   var FRICTION = 0.95;
@@ -442,20 +442,23 @@
       }
     }
 
-    // --- Novelty ---
+    // --- Novelty (diminishing returns — inverse exponential per person) ---
     for (var j = 0; j < nearby.length; j++) {
       var p = people[nearby[j].i];
       var prox = 1 - nearby[j].d / pr;
-      var take = 0.7 * prox * dt;
-      if (p.noveltyLeft > 0) {
+      // Diminishing returns: rate scales with remaining novelty
+      // Full noveltyLeft (1.0) → fast gain; near 0 → almost nothing
+      var dimFactor = p.noveltyLeft * p.noveltyLeft; // quadratic falloff
+      var take = 1.2 * prox * dimFactor * dt;
+      if (p.noveltyLeft > 0.01) {
         var taken = Math.min(take, p.noveltyLeft);
         p.noveltyLeft -= taken;
-        noveltyBar = Math.min(1, noveltyBar + taken * 0.06);
+        noveltyBar = Math.min(1, noveltyBar + taken * 0.08);
       }
     }
-    noveltyBar = Math.max(0, noveltyBar - 0.003 * dt);
+    noveltyBar = Math.max(0, noveltyBar - 0.006 * dt);
 
-    // --- Connection ---
+    // --- Connection (diminishing returns — fast initially, asymptotic) ---
     var connThreshold = 0.45;
     var compatThreshold = 0.3;
     for (var j = 0; j < nearby.length; j++) {
@@ -464,16 +467,20 @@
       var compat = compatibility(player, p);
 
       if (o > connThreshold && compat > compatThreshold && energyBar > 0.02) {
-        var rate = 0.18 * prox * compat * (o - connThreshold + 0.05) * dt;
-        p.conn = Math.min(compat, p.conn + rate); // capped by compatibility
+        // Diminishing returns: connection builds fast at first, then slows
+        // as it approaches the compat cap. Inverse exponential shape.
+        var connRatio = compat > 0 ? p.conn / compat : 1; // 0-1 how full
+        var dimFactor = Math.pow(1 - connRatio, 1.5); // fast start, slow finish
+        var rate = 0.35 * prox * compat * dimFactor * (o - connThreshold + 0.05) * dt;
+        p.conn = Math.min(compat, p.conn + rate);
       }
     }
 
-    // Connection decay for distant people
+    // Connection decay for distant people (slightly faster)
     for (var i = 0; i < people.length; i++) {
       var dd = dist(player.x, player.y, people[i].x, people[i].y);
       if (dd > pr * 1.5) {
-        people[i].conn = Math.max(0, people[i].conn - 0.012 * dt);
+        people[i].conn = Math.max(0, people[i].conn - 0.018 * dt);
       }
     }
 
@@ -486,9 +493,9 @@
     for (var i = 0; i < topN && i < sorted.length; i++) cSum += sorted[i];
     connectionBar = cSum / topN;
 
-    // --- Energy ---
+    // --- Energy (faster dynamics, connection people restore energy) ---
     if (alone) {
-      energyBar = Math.min(1, energyBar + 0.06 * dt);
+      energyBar = Math.min(1, energyBar + 0.10 * dt);
     } else {
       var drain = 0;
       for (var j = 0; j < nearby.length; j++) {
@@ -497,22 +504,20 @@
         var compat = compatibility(player, p);
 
         if (o > 0.25) {
-          // High openness + low compatibility = heavy drain
-          // High openness + high compatibility = low drain or slight gain
-          var connBenefit = p.conn * 1.3;
+          // High openness + low compatibility = heavy drain (faster)
           var compatDrainMod = Math.max(0, 1 - compat * 1.2);
           var personDrain = o * compatDrainMod * prox;
           drain += personDrain;
-          // Slight energy gain from high-connection high-compat people
-          if (p.conn > 0.4 && compat > 0.6) {
-            drain -= p.conn * 0.2 * prox * o;
+          // High-connection compatible people restore energy (mutual investment)
+          if (p.conn > 0.3 && compat > 0.6) {
+            drain -= p.conn * 0.35 * prox * o;
           }
         } else {
           // Low openness = mild performing drain
-          drain += 0.08 * prox;
+          drain += 0.12 * prox;
         }
       }
-      energyBar = Math.max(0, Math.min(1, energyBar - drain * 0.07 * dt));
+      energyBar = Math.max(0, Math.min(1, energyBar - drain * 0.10 * dt));
     }
   }
 
@@ -640,9 +645,19 @@
     var barW = 5;
     var barH = Math.min(90, H * 0.12);
     var gap = 8;
-    var mr = Math.min(24, W * 0.04);
+    var ml = Math.min(24, W * 0.04);
     var mt = Math.min(24, H * 0.03);
     var cr = 2.5;
+
+    // Title — top-left corner
+    ctx.font = '600 ' + Math.max(11, minDim * 0.018) + 'px -apple-system, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('belonging', ml, mt);
+
+    // Bars below title
+    var barsTop = mt + Math.max(18, minDim * 0.03);
 
     var bars = [
       { val: noveltyBar, color: [130, 130, 130] },     // gray — novelty
@@ -651,8 +666,8 @@
     ];
 
     for (var i = 0; i < bars.length; i++) {
-      var bx = W - mr - barW - (2 - i) * (barW + gap);
-      var by = mt;
+      var bx = ml + i * (barW + gap);
+      var by = barsTop;
 
       // Background
       ctx.beginPath();
