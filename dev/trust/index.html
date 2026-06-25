@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>TRUST</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: #000; color: #ccc;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+}
+#top-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 24px;
+  pointer-events: none;
+}
+#title {
+  font-size: 11px; letter-spacing: 6px; color: #666;
+  text-transform: uppercase;
+}
+#score-display {
+  font-size: 13px; color: #888; letter-spacing: 2px;
+}
+#score-value { color: #ff6b8a; }
+#round-display {
+  position: fixed; top: 44px; right: 24px; z-index: 10;
+  font-size: 10px; color: #444; letter-spacing: 1px;
+  pointer-events: none;
+}
+#person-label {
+  position: fixed; top: 44px; left: 24px; z-index: 10;
+  font-size: 10px; letter-spacing: 1px;
+  pointer-events: none;
+  transition: color 0.4s;
+}
+#canvas-container {
+  width: 100%; height: 100%;
+}
+canvas { display: block; }
+#controls {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: center; align-items: center;
+  gap: 24px; padding: 28px;
+}
+.ctrl-btn {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: #111; border: 2px solid #333;
+  font-size: 28px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.ctrl-btn:active { transform: scale(0.92); }
+.btn-trust { border-color: #2a6e4a; color: #4ade80; }
+.btn-trust:hover { background: #0a1f12; border-color: #4ade80; }
+.btn-distrust { border-color: #6e2a2a; color: #f87171; }
+.btn-distrust:hover { background: #1f0a0a; border-color: #f87171; }
+.ctrl-btn.disabled { opacity: 0.2; pointer-events: none; }
+#result-flash {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 20; font-size: 48px; color: #ff6b8a;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.3s;
+  text-shadow: 0 0 40px rgba(255,107,138,0.5);
+}
+#result-sub {
+  font-size: 12px; color: #666; letter-spacing: 3px;
+  margin-top: 8px; text-align: center;
+}
+#end-screen {
+  position: fixed; inset: 0; z-index: 30;
+  display: none; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: #000;
+}
+#end-screen .end-title {
+  font-size: 11px; letter-spacing: 6px; color: #555;
+  margin-bottom: 32px;
+}
+#end-screen .end-score {
+  font-size: 64px; color: #ff6b8a;
+  text-shadow: 0 0 60px rgba(255,107,138,0.3);
+}
+#end-screen .end-label {
+  font-size: 11px; color: #444; letter-spacing: 3px;
+  margin-top: 8px;
+}
+#end-screen .end-breakdown {
+  margin-top: 48px; font-size: 11px; color: #555;
+  line-height: 2.2; text-align: center;
+}
+.person-name { letter-spacing: 2px; }
+#end-screen .restart-btn {
+  margin-top: 48px; padding: 12px 32px;
+  background: #111; border: 1px solid #333;
+  color: #888; font-family: inherit; font-size: 11px;
+  letter-spacing: 3px; cursor: pointer;
+  transition: all 0.2s;
+}
+#end-screen .restart-btn:hover {
+  border-color: #ff6b8a; color: #ff6b8a;
+}
+</style>
+</head>
+<body>
+<div id="top-bar">
+  <div id="title">TRUST</div>
+  <div id="score-display"><span id="score-value">0</span></div>
+</div>
+<div id="round-display"></div>
+<div id="person-label"></div>
+<div id="canvas-container"></div>
+<div id="controls">
+  <button class="ctrl-btn btn-trust" id="btn-trust">&#x2713;</button>
+  <button class="ctrl-btn btn-distrust" id="btn-distrust">&#x2717;</button>
+</div>
+<div id="result-flash"><span id="result-number"></span><div id="result-sub"></div></div>
+<div id="end-screen">
+  <div class="end-title">TRUST</div>
+  <div class="end-score" id="end-total"></div>
+  <div class="end-label">TOTAL</div>
+  <div class="end-breakdown" id="end-breakdown"></div>
+  <button class="restart-btn" id="restart-btn">AGAIN</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function() {
+
+// --- Constants ---
+const GRID = 60;
+const SURFACE_SIZE = 4;
+const TOTAL_ROUNDS = 9;
+const SAFE_SCORE = 10;
+const MARBLE_STEPS = 200;
+const MARBLE_STEP_SIZE = 0.006;
+const MARBLE_MOMENTUM = 0.88;
+const GRADIENT_THRESHOLD = 0.001;
+
+// --- People definitions ---
+const PEOPLE = [
+  {
+    name: 'ALIGNED',
+    color: new THREE.Color(0x00bfa5), // teal
+    labelColor: '#00bfa5',
+    gaussians: [
+      { cx: 0.32, cy: 0.32, depth: -0.7, sigma: 0.025 },
+      { cx: 0.75, cy: 0.25, depth: -0.4, sigma: 0.03 },
+    ]
+  },
+  {
+    name: 'DECEPTIVE',
+    color: new THREE.Color(0xf5b342), // gold
+    labelColor: '#f5b342',
+    gaussians: [
+      { cx: 0.5, cy: 0.5, depth: -0.6, sigma: 0.028 },
+      { cx: 0.15, cy: 0.15, depth: -0.5, sigma: 0.022 },
+      { cx: 0.85, cy: 0.85, depth: -0.4, sigma: 0.025 },
+    ]
+  },
+  {
+    name: 'RELIABLE',
+    color: new THREE.Color(0xff6b8a), // rose
+    labelColor: '#ff6b8a',
+    gaussians: [
+      { cx: 0.68, cy: 0.58, depth: -1.0, sigma: 0.035 },
+    ]
+  }
+];
+
+// Player surface: 3 minima
+const PLAYER_GAUSSIANS = [
+  { cx: 0.3, cy: 0.3, depth: -0.8, sigma: 0.02 },
+  { cx: 0.7, cy: 0.6, depth: -0.6, sigma: 0.03 },
+  { cx: 0.2, cy: 0.8, depth: -0.5, sigma: 0.025 },
+];
+
+const PLAYER_MINIMA = [
+  { x: 0.3, y: 0.3 },
+  { x: 0.7, y: 0.6 },
+  { x: 0.2, y: 0.8 },
+];
+
+// --- State ---
+let scene, camera, renderer;
+let playerMesh, otherMesh, combinedMesh, marbleMesh, trailLine;
+let currentRound = 0;
+let totalScore = 0;
+let animating = false;
+let roundScores = [];
+let roundPersonIndices = [];
+let roundTrusted = [];
+let personDrifts = [
+  PEOPLE.map(p => p.gaussians.map(() => ({ dx: 0, dy: 0 }))),
+  PEOPLE.map(p => p.gaussians.map(() => ({ dx: (Math.random()-0.5)*0.04, dy: (Math.random()-0.5)*0.04 }))),
+  PEOPLE.map(p => p.gaussians.map(() => ({ dx: (Math.random()-0.5)*0.07, dy: (Math.random()-0.5)*0.07 }))),
+];
+
+// Camera orbit
+let orbitTheta = 0.6, orbitPhi = 0.8;
+let orbitRadius = 6.5;
+let autoRotate = true;
+let pointerDown = false, pointerStart = { x: 0, y: 0 }, orbitStart = { theta: 0, phi: 0 };
+let pinchStartDist = 0, pinchStartRadius = 0;
+
+// --- Surface evaluation ---
+function evalGaussians(gaussians, x, y, drifts) {
+  let z = 0;
+  for (let i = 0; i < gaussians.length; i++) {
+    const g = gaussians[i];
+    const dx = drifts ? drifts[i].dx : 0;
+    const dy = drifts ? drifts[i].dy : 0;
+    const ex = x - (g.cx + dx);
+    const ey = y - (g.cy + dy);
+    z += g.depth * Math.exp(-(ex*ex + ey*ey) / g.sigma);
+  }
+  return z;
+}
+
+function evalPlayer(x, y) {
+  return evalGaussians(PLAYER_GAUSSIANS, x, y, null);
+}
+
+function evalPerson(personIdx, cycle, x, y) {
+  const p = PEOPLE[personIdx];
+  const drifts = personDrifts[cycle][personIdx];
+  return evalGaussians(p.gaussians, x, y, drifts);
+}
+
+function evalCombined(personIdx, cycle, x, y) {
+  return evalPlayer(x, y) + evalPerson(personIdx, cycle, x, y);
+}
+
+// --- Mesh builders ---
+function buildSurfaceGeometry(evalFn, scale) {
+  const geo = new THREE.PlaneGeometry(SURFACE_SIZE, SURFACE_SIZE, GRID - 1, GRID - 1);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  let minZ = Infinity, maxZ = -Infinity;
+
+  // First pass: compute heights
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i);
+    const py = pos.getY(i);
+    const nx = (px / SURFACE_SIZE) + 0.5; // normalize to [0,1]
+    const ny = (py / SURFACE_SIZE) + 0.5;
+    const z = evalFn(nx, ny) * scale;
+    pos.setZ(i, z);
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+
+  geo.computeVertexNormals();
+  return { geometry: geo, minZ, maxZ };
+}
+
+function colorSurface(geo, baseColor, minZ, maxZ) {
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const range = maxZ - minZ || 1;
+
+  for (let i = 0; i < pos.count; i++) {
+    const z = pos.getZ(i);
+    const t = (z - minZ) / range;
+    const c = new THREE.Color().copy(baseColor);
+    c.multiplyScalar(0.3 + t * 0.7);
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+function createSurfaceMesh(evalFn, scale, baseColor, opacity) {
+  const { geometry, minZ, maxZ } = buildSurfaceGeometry(evalFn, scale);
+  colorSurface(geometry, baseColor, minZ, maxZ);
+
+  const mat = new THREE.MeshPhongMaterial({
+    vertexColors: true,
+    transparent: opacity < 1,
+    opacity: opacity,
+    side: THREE.DoubleSide,
+    shininess: 30,
+    flatShading: false,
+  });
+
+  const mesh = new THREE.Mesh(geometry, mat);
+
+  // Wireframe overlay
+  const wireMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.04,
+  });
+  const wireMesh = new THREE.Mesh(geometry.clone(), wireMat);
+  mesh.add(wireMesh);
+
+  mesh.rotation.x = -Math.PI / 2;
+  return mesh;
+}
+
+function updateSurfaceMesh(mesh, evalFn, scale, baseColor) {
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position;
+  let minZ = Infinity, maxZ = -Infinity;
+
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i);
+    const py = pos.getY(i);
+    const nx = (px / SURFACE_SIZE) + 0.5;
+    const ny = (py / SURFACE_SIZE) + 0.5;
+    const z = evalFn(nx, ny) * scale;
+    pos.setZ(i, z);
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  colorSurface(geo, baseColor, minZ, maxZ);
+  geo.attributes.color.needsUpdate = true;
+
+  // Update wireframe child
+  if (mesh.children.length > 0) {
+    const wireGeo = mesh.children[0].geometry;
+    const wirePos = wireGeo.attributes.position;
+    for (let i = 0; i < wirePos.count; i++) {
+      wirePos.setZ(i, pos.getZ(i));
+    }
+    wirePos.needsUpdate = true;
+  }
+}
+
+// --- Scene setup ---
+function init() {
+  scene = new THREE.Scene();
+
+  const aspect = window.innerWidth / window.innerHeight;
+  camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+  updateCamera();
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000);
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0x404060, 0.6);
+  scene.add(ambient);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(3, 5, 4);
+  scene.add(dirLight);
+
+  const rimLight = new THREE.DirectionalLight(0x6644aa, 0.3);
+  rimLight.position.set(-3, 2, -4);
+  scene.add(rimLight);
+
+  // Player surface (bottom)
+  playerMesh = createSurfaceMesh(evalPlayer, SURFACE_SIZE * 0.5, new THREE.Color(0x5533aa), 1.0);
+  playerMesh.position.y = -1.0;
+  scene.add(playerMesh);
+
+  // Other person surface (top)
+  const pIdx = currentRound % 3;
+  const cycle = Math.floor(currentRound / 3);
+  otherMesh = createSurfaceMesh((x, y) => evalPerson(pIdx, cycle, x, y), SURFACE_SIZE * 0.5, PEOPLE[pIdx].color, 0.6);
+  otherMesh.position.y = 1.2;
+  scene.add(otherMesh);
+
+  // Combined surface (hidden initially)
+  combinedMesh = createSurfaceMesh((x, y) => evalCombined(pIdx, cycle, x, y), SURFACE_SIZE * 0.5, new THREE.Color(0x8866cc), 0.85);
+  combinedMesh.position.y = 0;
+  combinedMesh.visible = false;
+  scene.add(combinedMesh);
+
+  // Marble
+  const marbleGeo = new THREE.SphereGeometry(0.08, 16, 16);
+  const marbleMat = new THREE.MeshPhongMaterial({
+    color: 0xffffff,
+    emissive: 0xff6b8a,
+    emissiveIntensity: 0.6,
+    shininess: 100,
+  });
+  marbleMesh = new THREE.Mesh(marbleGeo, marbleMat);
+  marbleMesh.visible = false;
+  scene.add(marbleMesh);
+
+  // Trail
+  const trailGeo = new THREE.BufferGeometry();
+  const trailPositions = new Float32Array(MARBLE_STEPS * 3);
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+  trailGeo.setDrawRange(0, 0);
+  const trailMat = new THREE.LineBasicMaterial({ color: 0xff6b8a, transparent: true, opacity: 0.4 });
+  trailLine = new THREE.Line(trailGeo, trailMat);
+  scene.add(trailLine);
+
+  // Events
+  setupControls();
+  window.addEventListener('resize', onResize);
+
+  updateRoundUI();
+  animate();
+}
+
+function updateCamera() {
+  camera.position.x = orbitRadius * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+  camera.position.y = orbitRadius * Math.cos(orbitPhi);
+  camera.position.z = orbitRadius * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+  camera.lookAt(0, 0, 0);
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// --- Orbit controls (inline) ---
+function setupControls() {
+  const el = renderer.domElement;
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' && e.isPrimary === false) return;
+    pointerDown = true;
+    autoRotate = false;
+    pointerStart = { x: e.clientX, y: e.clientY };
+    orbitStart = { theta: orbitTheta, phi: orbitPhi };
+  });
+
+  el.addEventListener('pointermove', (e) => {
+    if (!pointerDown) return;
+    const dx = (e.clientX - pointerStart.x) * 0.008;
+    const dy = (e.clientY - pointerStart.y) * 0.008;
+    orbitTheta = orbitStart.theta + dx;
+    orbitPhi = Math.max(0.2, Math.min(Math.PI - 0.2, orbitStart.phi + dy));
+    updateCamera();
+  });
+
+  el.addEventListener('pointerup', () => { pointerDown = false; });
+  el.addEventListener('pointercancel', () => { pointerDown = false; });
+
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    orbitRadius = Math.max(3.5, Math.min(12, orbitRadius + e.deltaY * 0.005));
+    updateCamera();
+  }, { passive: false });
+
+  // Pinch zoom
+  let activeTouches = {};
+  el.addEventListener('touchstart', (e) => {
+    for (const t of e.changedTouches) activeTouches[t.identifier] = t;
+    if (Object.keys(activeTouches).length === 2) {
+      const ids = Object.keys(activeTouches);
+      const t1 = activeTouches[ids[0]], t2 = activeTouches[ids[1]];
+      pinchStartDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      pinchStartRadius = orbitRadius;
+    }
+  }, { passive: true });
+
+  el.addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) activeTouches[t.identifier] = t;
+    if (Object.keys(activeTouches).length === 2) {
+      const ids = Object.keys(activeTouches);
+      const t1 = activeTouches[ids[0]], t2 = activeTouches[ids[1]];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      const scale = pinchStartDist / dist;
+      orbitRadius = Math.max(3.5, Math.min(12, pinchStartRadius * scale));
+      updateCamera();
+    }
+  }, { passive: true });
+
+  el.addEventListener('touchend', (e) => {
+    for (const t of e.changedTouches) delete activeTouches[t.identifier];
+  }, { passive: true });
+
+  // Buttons
+  document.getElementById('btn-trust').addEventListener('click', () => {
+    if (animating || currentRound >= TOTAL_ROUNDS) return;
+    doTrust();
+  });
+
+  document.getElementById('btn-distrust').addEventListener('click', () => {
+    if (animating || currentRound >= TOTAL_ROUNDS) return;
+    doDistrust();
+  });
+
+  document.getElementById('restart-btn').addEventListener('click', restart);
+}
+
+// --- Round management ---
+function getPersonIndex() { return currentRound % 3; }
+function getCycle() { return Math.floor(currentRound / 3); }
+
+function updateRoundUI() {
+  const pIdx = getPersonIndex();
+  document.getElementById('round-display').textContent = (currentRound + 1) + ' / ' + TOTAL_ROUNDS;
+  document.getElementById('person-label').textContent = PEOPLE[pIdx].name;
+  document.getElementById('person-label').style.color = PEOPLE[pIdx].labelColor;
+  document.getElementById('score-value').textContent = totalScore;
+}
+
+function updateSurfaces() {
+  const pIdx = getPersonIndex();
+  const cycle = getCycle();
+  const personColor = PEOPLE[pIdx].color;
+
+  // Update other mesh
+  updateSurfaceMesh(otherMesh, (x, y) => evalPerson(pIdx, cycle, x, y), SURFACE_SIZE * 0.5, personColor);
+  otherMesh.material.color.set(0xffffff);
+
+  // Update combined mesh
+  const combinedColor = new THREE.Color(0x5533aa).lerp(personColor.clone(), 0.4);
+  updateSurfaceMesh(combinedMesh, (x, y) => evalCombined(pIdx, cycle, x, y), SURFACE_SIZE * 0.5, combinedColor);
+}
+
+function showBothSurfaces() {
+  playerMesh.visible = true;
+  playerMesh.position.y = -1.0;
+  otherMesh.visible = true;
+  otherMesh.position.y = 1.2;
+  combinedMesh.visible = false;
+  marbleMesh.visible = false;
+  trailLine.geometry.setDrawRange(0, 0);
+
+  setButtonsEnabled(true);
+}
+
+function setButtonsEnabled(enabled) {
+  const cl = enabled ? 'remove' : 'add';
+  document.getElementById('btn-trust').classList[cl]('disabled');
+  document.getElementById('btn-distrust').classList[cl]('disabled');
+}
+
+// --- Trust action ---
+function doTrust() {
+  animating = true;
+  setButtonsEnabled(false);
+  autoRotate = false;
+
+  const pIdx = getPersonIndex();
+  const cycle = getCycle();
+
+  updateSurfaces();
+
+  // Animate merge
+  const mergeStart = performance.now();
+  const mergeDuration = 800;
+
+  function animateMerge(now) {
+    const t = Math.min(1, (now - mergeStart) / mergeDuration);
+    const ease = t * t * (3 - 2 * t); // smoothstep
+
+    playerMesh.position.y = -1.0 + ease * 1.0;
+    otherMesh.position.y = 1.2 - ease * 1.2;
+    otherMesh.material.opacity = 0.6 * (1 - ease);
+    playerMesh.material.opacity = 1 - ease * 0.5;
+
+    if (t < 1) {
+      requestAnimationFrame(animateMerge);
+    } else {
+      playerMesh.visible = false;
+      otherMesh.visible = false;
+      combinedMesh.visible = true;
+      combinedMesh.position.y = 0;
+
+      // Spawn marble
+      spawnAndRollMarble(pIdx, cycle);
+    }
+  }
+
+  requestAnimationFrame(animateMerge);
+}
+
+function spawnAndRollMarble(pIdx, cycle) {
+  // Random start position
+  let mx = 0.15 + Math.random() * 0.7;
+  let my = 0.15 + Math.random() * 0.7;
+
+  const path = [];
+  let vx = 0, vy = 0;
+  const eps = 0.005;
+
+  // Compute gradient descent path
+  for (let step = 0; step < MARBLE_STEPS; step++) {
+    const z = evalCombined(pIdx, cycle, mx, my);
+    const dzx = (evalCombined(pIdx, cycle, mx + eps, my) - evalCombined(pIdx, cycle, mx - eps, my)) / (2 * eps);
+    const dzy = (evalCombined(pIdx, cycle, mx, my + eps) - evalCombined(pIdx, cycle, mx, my - eps)) / (2 * eps);
+
+    vx = MARBLE_MOMENTUM * vx - MARBLE_STEP_SIZE * dzx;
+    vy = MARBLE_MOMENTUM * vy - MARBLE_STEP_SIZE * dzy;
+
+    mx += vx;
+    my += vy;
+
+    // Clamp to bounds
+    mx = Math.max(0.02, Math.min(0.98, mx));
+    my = Math.max(0.02, Math.min(0.98, my));
+
+    const worldX = (mx - 0.5) * SURFACE_SIZE;
+    const worldZ = (my - 0.5) * SURFACE_SIZE;
+    const worldY = evalCombined(pIdx, cycle, mx, my) * SURFACE_SIZE * 0.5;
+
+    path.push({ x: worldX, y: worldY + 0.1, z: -worldZ, nx: mx, ny: my });
+
+    const gradMag = Math.sqrt(dzx * dzx + dzy * dzy);
+    if (gradMag < GRADIENT_THRESHOLD && step > 10) break;
+  }
+
+  // Set up trail geometry
+  const trailPos = trailLine.geometry.attributes.position;
+  for (let i = 0; i < path.length && i < MARBLE_STEPS; i++) {
+    trailPos.setXYZ(i, path[i].x, path[i].y, path[i].z);
+  }
+  trailPos.needsUpdate = true;
+
+  marbleMesh.visible = true;
+
+  // Animate marble along path
+  const animStart = performance.now();
+  const totalDuration = 2500;
+
+  function animateMarble(now) {
+    const t = Math.min(1, (now - animStart) / totalDuration);
+    // Ease out
+    const et = 1 - Math.pow(1 - t, 3);
+    const idx = Math.min(path.length - 1, Math.floor(et * (path.length - 1)));
+    const p = path[idx];
+
+    marbleMesh.position.set(p.x, p.y, p.z);
+    trailLine.geometry.setDrawRange(0, idx + 1);
+
+    if (t < 1) {
+      requestAnimationFrame(animateMarble);
+    } else {
+      // Score: distance from marble's final position to nearest player minimum
+      const finalX = p.nx;
+      const finalY = p.ny;
+
+      let minDist = Infinity;
+      for (const m of PLAYER_MINIMA) {
+        const d = Math.sqrt((finalX - m.x) ** 2 + (finalY - m.y) ** 2);
+        if (d < minDist) minDist = d;
+      }
+
+      // Score: closer = higher. Max dist ~1.0 on unit square
+      const score = Math.round(Math.max(0, (1 - minDist / 0.5)) * 100);
+      const clampedScore = Math.max(0, Math.min(100, score));
+
+      roundScores.push(clampedScore);
+      roundPersonIndices.push(pIdx);
+      roundTrusted.push(true);
+      totalScore += clampedScore;
+
+      showResult(clampedScore, true);
+    }
+  }
+
+  requestAnimationFrame(animateMarble);
+}
+
+function doDistrust() {
+  animating = true;
+  setButtonsEnabled(false);
+
+  const pIdx = getPersonIndex();
+  roundScores.push(SAFE_SCORE);
+  roundPersonIndices.push(pIdx);
+  roundTrusted.push(false);
+  totalScore += SAFE_SCORE;
+
+  showResult(SAFE_SCORE, false);
+}
+
+function showResult(score, trusted) {
+  const flash = document.getElementById('result-flash');
+  const num = document.getElementById('result-number');
+  const sub = document.getElementById('result-sub');
+
+  num.textContent = '+' + score;
+  sub.textContent = trusted ? '' : 'SAFE';
+  flash.style.opacity = '1';
+
+  document.getElementById('score-value').textContent = totalScore;
+
+  setTimeout(() => {
+    flash.style.opacity = '0';
+
+    setTimeout(() => {
+      currentRound++;
+
+      if (currentRound >= TOTAL_ROUNDS) {
+        showEndScreen();
+        return;
+      }
+
+      updateSurfaces();
+      updateRoundUI();
+      showBothSurfaces();
+      otherMesh.material.opacity = 0.6;
+      playerMesh.material.opacity = 1;
+      autoRotate = true;
+      animating = false;
+    }, 400);
+  }, 1200);
+}
+
+function showEndScreen() {
+  document.getElementById('controls').style.display = 'none';
+  const endScreen = document.getElementById('end-screen');
+  endScreen.style.display = 'flex';
+  document.getElementById('end-total').textContent = totalScore;
+
+  // Breakdown by person
+  let html = '';
+  for (let p = 0; p < 3; p++) {
+    const person = PEOPLE[p];
+    let personTotal = 0;
+    let trusted = 0;
+    let rounds = 0;
+    for (let r = 0; r < roundScores.length; r++) {
+      if (roundPersonIndices[r] === p) {
+        personTotal += roundScores[r];
+        if (roundTrusted[r]) trusted++;
+        rounds++;
+      }
+    }
+    html += `<div><span class="person-name" style="color:${person.labelColor}">${person.name}</span> &mdash; ${personTotal} <span style="color:#444">(trusted ${trusted}/${rounds})</span></div>`;
+  }
+  document.getElementById('end-breakdown').innerHTML = html;
+}
+
+function restart() {
+  currentRound = 0;
+  totalScore = 0;
+  roundScores = [];
+  roundPersonIndices = [];
+  roundTrusted = [];
+  animating = false;
+  autoRotate = true;
+
+  // Re-randomize drifts
+  personDrifts = [
+    PEOPLE.map(p => p.gaussians.map(() => ({ dx: 0, dy: 0 }))),
+    PEOPLE.map(p => p.gaussians.map(() => ({ dx: (Math.random()-0.5)*0.04, dy: (Math.random()-0.5)*0.04 }))),
+    PEOPLE.map(p => p.gaussians.map(() => ({ dx: (Math.random()-0.5)*0.07, dy: (Math.random()-0.5)*0.07 }))),
+  ];
+
+  document.getElementById('end-screen').style.display = 'none';
+  document.getElementById('controls').style.display = 'flex';
+
+  updateSurfaces();
+  updateRoundUI();
+  showBothSurfaces();
+  otherMesh.material.opacity = 0.6;
+  playerMesh.material.opacity = 1;
+}
+
+// --- Animation loop ---
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (autoRotate) {
+    orbitTheta += 0.003;
+    updateCamera();
+  }
+
+  renderer.render(scene, camera);
+}
+
+// --- Init ---
+init();
+
+})();
+</script>
+</body>
+</html>
