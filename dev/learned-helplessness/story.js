@@ -2,75 +2,69 @@
  * CTRL — Learned Helplessness (3D version)
  *
  * A ball sits in a local minimum on a 2D potential surface.
- * Two sliders each lower half the ridge wall between the local and global minima.
+ * Two sliders reshape the surface (low-pass filtered, ~1s time constant).
  * An effort button applies random kicks.
  *
  * Discovery arc:
- *   1. Effort alone → ball jitters but stays trapped (barrier too high)
- *   2. One slider → lowers its half of the ridge, ~30% escape chance
- *   3. Both sliders → entire ridge lowered, ~70-90% escape with effort
- *   4. Ball rolls to the deep green global minimum
+ *   1. At default (50/50): ball in local orange minimum, stuck
+ *   2. Moving sliders reshapes surface — ball follows physics
+ *   3. Wrong direction: still stuck, maybe deeper
+ *   4. Right combo (~s1=90, s2=10): ball position gets worse (higher/redder)
+ *      but the ridge is narrow enough that kicks can push the ball over
+ *   5. "It gets harder before it gets better"
  *
  * Surface design:
  *   - Local well at (-0.8, -0.8): shallow, orange zone
- *   - Global well at (1.0, 1.0): deep, green zone
- *   - Ridge runs perpendicular to connecting diagonal
- *   - Slider 1 controls the left half of the ridge (perp < 0)
- *   - Slider 2 controls the right half (perp > 0)
- *   - Both together lower the ridge across its full width
+ *   - Global well at (1.0, 1.0): deep, green zone (goal)
+ *   - Ridge between them (Gaussian along connecting diagonal)
+ *   - s1: tilts along the diagonal — lifts local well area
+ *   - s2: controls ridge width — lower = narrower = easier to pass
+ *   - Both start at 50 (neutral). Neither extreme is the answer.
  *
- * Physics calibrated via Monte Carlo simulation:
- *   gravity=30, damping=7, kickForce=7
- *   Barrier default=1.85 → 0% escape
- *   Barrier both@100=0.46 → 88% escape
+ * Color scheme:
+ *   - Bottom slice (1 ball-height): solid green (goal zone)
+ *   - Everything above: light orange → deep red gradient
  */
 
 import * as THREE from 'three';
 import { createSurfaceMesh, updateSurfaceMesh } from '../../lib/surface.js';
 import { OrbitController } from '../../lib/camera.js';
 import { BallPhysics } from '../../lib/physics.js';
-import { depthColor } from '../../lib/colors.js';
+import { goalColorTo } from '../../lib/colors.js';
 
 // ─── Surface equation ───────────────────────────────────────────────
 
-const RIDGE_REDUCTION = 0.92; // how much each slider can lower its half
-
 function potential(x, y, s1, s2) {
-  const lx = x + 0.8, ly = y + 0.8;   // offset from local well center
-  const gx = x - 1.0, gy = y - 1.0;   // offset from global well center
+  const a1 = (s1 - 50) / 50;  // -1 to +1
+  const a2 = (s2 - 50) / 50;
+
+  const lx = x + 0.8, ly = y + 0.8;
+  const gx = x - 1.0, gy = y - 1.0;
   const r2L = lx * lx + ly * ly;
   const r2G = gx * gx + gy * gy;
 
-  // Local well: shallow (orange zone)
+  // Local well: shallow (orange zone at default)
   const localWell = -1.5 * Math.exp(-1.8 * r2L);
 
-  // Global well: deep (green zone)
+  // Global well: deep (green goal zone)
   const globalWell = -4.5 * Math.exp(-0.6 * r2G);
 
-  // Ridge between the wells
-  // "along" = projection onto connecting diagonal (local→global direction)
-  // "perp"  = perpendicular to that diagonal
+  // Ridge between the wells along the connecting diagonal
   const along = (x - 0.1) * 0.707 + (y - 0.1) * 0.707;
-  const perp = -(x - 0.1) * 0.707 + (y - 0.1) * 0.707;
-
-  // Ridge profile: tight Gaussian along the diagonal
-  const ridgeProfile = Math.exp(-3.0 * along * along);
-
-  // Each slider reduces its half of the ridge via sigmoid blending
-  const s1n = s1 / 100;
-  const s2n = s2 / 100;
-  const leftWeight = 1 / (1 + Math.exp(8 * perp));   // 1 when perp<0 (slider1's half)
-  const rightWeight = 1 - leftWeight;                  // 1 when perp>0 (slider2's half)
-  const ridgeReduction = s1n * leftWeight + s2n * rightWeight;
-  const ridgeHeight = 2.0 * (1 - RIDGE_REDUCTION * ridgeReduction);
-
-  const ridge = ridgeHeight * ridgeProfile;
+  const ridgeWidth = 3.0 + 2.5 * a2;  // s2 low → narrow ridge, s2 high → wide
+  const ridgeH = 2.0 + 0.4 * a2;
+  const ridgeProfile = Math.exp(-ridgeWidth * along * along);
+  const ridge = ridgeH * ridgeProfile;
 
   // Containment bowl
   const r2 = x * x + y * y;
   const boundary = 0.08 * r2;
 
-  return localWell + globalWell + ridge + boundary;
+  // s1: tilt along the local→global diagonal
+  // s1 > 50 → raises the local-well side, lowers the global side
+  const tilt = -1.4 * a1 * along;
+
+  return localWell + globalWell + ridge + boundary + tilt;
 }
 
 // ─── Configuration ──────────────────────────────────────────────────
@@ -79,6 +73,11 @@ const SURFACE_RANGE = [-2.2, 2.2];
 const SURFACE_RES = 120;
 const BALL_START = [-0.8, -0.8];
 const BALL_RADIUS = 0.12;
+const HEIGHT_SCALE = 0.45;
+
+// Green zone: bottom slice ~1 ball-diameter tall in visual space
+// In unscaled potential: 0.6 units → 0.6 * HEIGHT_SCALE = 0.27 visual units ≈ 1 ball diameter
+const GOAL_BAND = 0.6;
 
 const PHYSICS_OPTS = {
   gravity: 30,
@@ -87,8 +86,6 @@ const PHYSICS_OPTS = {
   kickForce: 7,
   bounds: [-2.0, 2.0],
 };
-
-const HEIGHT_SCALE = 0.45; // flatten the surface so the interior is visible
 
 const CAMERA_OPTS = {
   radius: 11,
@@ -99,19 +96,50 @@ const CAMERA_OPTS = {
   target: new THREE.Vector3(0, -0.8, 0),
 };
 
+// Low-pass filter time constant (seconds)
+const FILTER_TAU = 1.0;
+
+// ─── Low-pass filter ────────────────────────────────────────────────
+
+class LowPass {
+  constructor(initial, tau) {
+    this.value = initial;
+    this.target = initial;
+    this.tau = tau;
+  }
+  set(target) { this.target = target; }
+  update(dt) {
+    const alpha = 1 - Math.exp(-dt / this.tau);
+    this.value += (this.target - this.value) * alpha;
+    return this.value;
+  }
+}
+
 // ─── Init ───────────────────────────────────────────────────────────
 
-let scene, renderer, camera, orbit, surfaceMesh, ballMesh, ballGlow, ballLight;
+let scene, renderer, camera, orbit;
+let surfaceMesh, gridMesh;
+let ballMesh, ballGlow, ballLight;
 let physics;
 let slider1, slider2, kickBtn, resetBtn;
 let clock;
-let heightRange = { min: -4.5, max: 2.0 };
+let lpS1, lpS2; // low-pass filtered slider values
+
+// Color function: green goal zone at bottom, orange→red above
+function surfaceColorFn(out, value, min, max) {
+  const goalThreshold = min + GOAL_BAND;
+  return goalColorTo(out, value, goalThreshold, max);
+}
 
 export function init() {
   slider1 = document.getElementById('slider1');
   slider2 = document.getElementById('slider2');
   kickBtn = document.getElementById('btn-kick');
   resetBtn = document.getElementById('btn-reset');
+
+  // Low-pass filters starting at slider default (50)
+  lpS1 = new LowPass(50, FILTER_TAU);
+  lpS2 = new LowPass(50, FILTER_TAU);
 
   // Scene
   scene = new THREE.Scene();
@@ -142,18 +170,20 @@ export function init() {
   rim.position.set(0, -2, -8);
   scene.add(rim);
 
-  // Surface mesh
-  surfaceMesh = createSurfaceMesh(
-    (x, y) => potential(x, y, 0, 0),
-    {
-      xRange: SURFACE_RANGE, yRange: SURFACE_RANGE,
-      resolution: SURFACE_RES,
-      heightScale: HEIGHT_SCALE,
-      opacity: 0.85,
-    }
-  );
+  // Surface mesh (colored, semi-transparent)
+  const V0 = (x, y) => potential(x, y, 50, 50);
+  surfaceMesh = createSurfaceMesh(V0, {
+    xRange: SURFACE_RANGE, yRange: SURFACE_RANGE,
+    resolution: SURFACE_RES,
+    heightScale: HEIGHT_SCALE,
+    opacity: 0.7,
+    colorFn: surfaceColorFn,
+  });
   scene.add(surfaceMesh);
-  _updateHeightRange();
+
+  // Wireframe grid overlay
+  gridMesh = _createGrid(V0);
+  scene.add(gridMesh);
 
   // Ball
   const ballGeo = new THREE.SphereGeometry(BALL_RADIUS, 32, 32);
@@ -178,13 +208,13 @@ export function init() {
   ballGlow = new THREE.Mesh(glowGeo, glowMat);
   scene.add(ballGlow);
 
-  // Point light on the ball — makes it pop against the surface
+  // Point light on ball
   ballLight = new THREE.PointLight(0xff8844, 1.5, 3);
   scene.add(ballLight);
 
-  // Physics
+  // Physics — uses filtered slider values
   physics = new BallPhysics(
-    (x, y) => potential(x, y, getS1(), getS2()),
+    (x, y) => potential(x, y, lpS1.value, lpS2.value),
     PHYSICS_OPTS
   );
   physics.reset(BALL_START[0], BALL_START[1]);
@@ -192,12 +222,86 @@ export function init() {
   // Events
   kickBtn.addEventListener('pointerdown', onKick);
   resetBtn.addEventListener('click', onReset);
-  slider1.addEventListener('input', onSliderChange);
-  slider2.addEventListener('input', onSliderChange);
   window.addEventListener('resize', onResize);
 
   clock = new THREE.Clock();
   animate();
+}
+
+// ─── Wireframe grid ─────────────────────────────────────────────────
+
+function _createGrid(V) {
+  const lines = 10;
+  const [rMin, rMax] = SURFACE_RANGE;
+  const step = (rMax - rMin) / lines;
+  const detail = 80;
+
+  const points = [];
+
+  // Lines along X (varying y at fixed x positions)
+  for (let i = 0; i <= lines; i++) {
+    const x = rMin + i * step;
+    for (let j = 0; j < detail; j++) {
+      const y1 = rMin + (j / detail) * (rMax - rMin);
+      const y2 = rMin + ((j + 1) / detail) * (rMax - rMin);
+      const h1 = V(x, y1) * HEIGHT_SCALE;
+      const h2 = V(x, y2) * HEIGHT_SCALE;
+      points.push(new THREE.Vector3(x, h1 + 0.01, y1));
+      points.push(new THREE.Vector3(x, h2 + 0.01, y2));
+    }
+  }
+
+  // Lines along Y (varying x at fixed y positions)
+  for (let i = 0; i <= lines; i++) {
+    const y = rMin + i * step;
+    for (let j = 0; j < detail; j++) {
+      const x1 = rMin + (j / detail) * (rMax - rMin);
+      const x2 = rMin + ((j + 1) / detail) * (rMax - rMin);
+      const h1 = V(x1, y) * HEIGHT_SCALE;
+      const h2 = V(x2, y) * HEIGHT_SCALE;
+      points.push(new THREE.Vector3(x1, h1 + 0.01, y));
+      points.push(new THREE.Vector3(x2, h2 + 0.01, y));
+    }
+  }
+
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.12,
+  });
+  return new THREE.LineSegments(geo, mat);
+}
+
+function _updateGrid(V) {
+  const lines = 10;
+  const [rMin, rMax] = SURFACE_RANGE;
+  const step = (rMax - rMin) / lines;
+  const detail = 80;
+  const pos = gridMesh.geometry.attributes.position;
+  let idx = 0;
+
+  for (let i = 0; i <= lines; i++) {
+    const x = rMin + i * step;
+    for (let j = 0; j < detail; j++) {
+      const y1 = rMin + (j / detail) * (rMax - rMin);
+      const y2 = rMin + ((j + 1) / detail) * (rMax - rMin);
+      pos.setY(idx++, V(x, y1) * HEIGHT_SCALE + 0.01);
+      pos.setY(idx++, V(x, y2) * HEIGHT_SCALE + 0.01);
+    }
+  }
+
+  for (let i = 0; i <= lines; i++) {
+    const y = rMin + i * step;
+    for (let j = 0; j < detail; j++) {
+      const x1 = rMin + (j / detail) * (rMax - rMin);
+      const x2 = rMin + ((j + 1) / detail) * (rMax - rMin);
+      pos.setY(idx++, V(x1, y) * HEIGHT_SCALE + 0.01);
+      pos.setY(idx++, V(x2, y) * HEIGHT_SCALE + 0.01);
+    }
+  }
+
+  pos.needsUpdate = true;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -205,47 +309,35 @@ export function init() {
 function getS1() { return parseFloat(slider1.value); }
 function getS2() { return parseFloat(slider2.value); }
 
-function _updateHeightRange() {
-  const pos = surfaceMesh.geometry.attributes.position;
-  let hMin = Infinity, hMax = -Infinity;
-  for (let i = 0; i < pos.count; i++) {
-    const h = pos.getY(i);
-    if (h < hMin) hMin = h;
-    if (h > hMax) hMax = h;
-  }
-  heightRange.min = hMin;
-  heightRange.max = hMax;
-}
-
-function onSliderChange() {
-  const V = (x, y) => potential(x, y, getS1(), getS2());
-  physics.V = V;
-  updateSurfaceMesh(surfaceMesh, V);
-  _updateHeightRange();
-}
-
 function onKick(e) {
   e.preventDefault();
   physics.kick();
 
-  // Visual pulse on button
   kickBtn.classList.add('pulse');
   setTimeout(() => kickBtn.classList.remove('pulse'), 200);
 
-  // Flash the ball
   ballMesh.material.emissiveIntensity = 1.2;
   ballGlow.material.opacity = 0.35;
   setTimeout(() => {
     ballMesh.material.emissiveIntensity = 0.4;
-    ballGlow.material.opacity = 0.12;
+    ballGlow.material.opacity = 0.15;
   }, 180);
 }
 
 function onReset() {
   physics.reset(BALL_START[0], BALL_START[1]);
-  slider1.value = 0;
-  slider2.value = 0;
-  onSliderChange();
+  slider1.value = 50;
+  slider2.value = 50;
+  lpS1.value = 50; lpS1.target = 50;
+  lpS2.value = 50; lpS2.target = 50;
+  _rebuildSurface();
+}
+
+function _rebuildSurface() {
+  const V = (x, y) => potential(x, y, lpS1.value, lpS2.value);
+  physics.V = V;
+  updateSurfaceMesh(surfaceMesh, V);
+  _updateGrid(V);
 }
 
 function onResize() {
@@ -263,7 +355,20 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
-  // Physics substeps for stability
+  // Update low-pass filters from slider positions
+  lpS1.set(getS1());
+  lpS2.set(getS2());
+  const prevS1 = lpS1.value;
+  const prevS2 = lpS2.value;
+  lpS1.update(dt);
+  lpS2.update(dt);
+
+  // Rebuild surface if filtered values changed meaningfully
+  if (Math.abs(lpS1.value - prevS1) > 0.01 || Math.abs(lpS2.value - prevS2) > 0.01) {
+    _rebuildSurface();
+  }
+
+  // Physics substeps
   const substeps = 8;
   const subDt = dt / substeps;
   for (let i = 0; i < substeps; i++) {
@@ -279,11 +384,20 @@ function animate() {
   ballGlow.position.copy(ballMesh.position);
   ballLight.position.set(bx, visualH + BALL_RADIUS + 0.3, by);
 
-  // Color ball by depth
-  const c = depthColor(bh, heightRange.min, heightRange.max);
-  ballMesh.material.color.copy(c);
-  ballMesh.material.emissive.copy(c);
-  ballGlow.material.color.copy(c);
+  // Color ball by its zone
+  const goalColor = new THREE.Color(40 / 255, 200 / 255, 80 / 255);
+  const sufferColor = new THREE.Color(1.0, 0.4, 0.15);
+  // If ball is near the global minimum, it turns green
+  const distToGoal = Math.sqrt((bx - 1) ** 2 + (by - 1) ** 2);
+  if (distToGoal < 0.5) {
+    ballMesh.material.color.copy(goalColor);
+    ballMesh.material.emissive.copy(goalColor);
+    ballGlow.material.color.copy(goalColor);
+  } else {
+    ballMesh.material.color.copy(sufferColor);
+    ballMesh.material.emissive.copy(sufferColor);
+    ballGlow.material.color.copy(sufferColor);
+  }
 
   // Camera
   orbit.update(dt);

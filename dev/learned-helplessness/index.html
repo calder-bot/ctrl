@@ -38,7 +38,7 @@ canvas { display: block; }
 
 #controls {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-  display: flex; align-items: flex-end; gap: 12px;
+  display: flex; align-items: stretch; gap: 12px;
   padding: 20px 24px;
   padding-bottom: max(20px, env(safe-area-inset-bottom, 20px));
 }
@@ -47,6 +47,7 @@ canvas { display: block; }
   flex: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 10px;
 }
 
@@ -92,9 +93,9 @@ input[type="range"] {
 /* ─── Buttons ─── */
 
 .btn {
-  width: 56px; height: 56px; border-radius: 50%;
+  border-radius: 50%;
   background: #111; border: 2px solid #333;
-  color: #ccc; font-size: 22px; cursor: pointer;
+  color: #ccc; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
   -webkit-tap-highlight-color: transparent;
@@ -105,14 +106,16 @@ input[type="range"] {
 .btn:active { transform: scale(0.92); }
 
 #btn-kick {
-  border-color: #ff6b8a;
-  color: #ff6b8a;
-  font-size: 18px;
+  /* Match the height of the slider stack (two 28px thumbs + 10px gap + 8px tracks) */
+  width: 46px; height: 46px;
+  border-color: #cc3344;
+  background: #cc3344;
+  align-self: center;
 }
-#btn-kick:hover { background: #1f0a0f; }
+#btn-kick:hover { background: #dd4455; }
 #btn-kick.pulse {
-  background: rgba(255, 107, 138, 0.2);
-  box-shadow: 0 0 20px rgba(255, 107, 138, 0.4);
+  background: #ff4466;
+  box-shadow: 0 0 20px rgba(255, 68, 102, 0.5);
 }
 
 #btn-reset {
@@ -127,7 +130,7 @@ input[type="range"] {
   #top-bar { padding: 10px 16px; }
   .title { font-size: 9px; letter-spacing: 4px; }
   #controls { padding: 14px 16px; }
-  .btn { width: 48px; height: 48px; }
+  #btn-kick { width: 40px; height: 40px; }
   #btn-reset { top: 10px; right: 16px; }
 }
 </style>
@@ -143,10 +146,10 @@ input[type="range"] {
 
 <div id="controls">
   <div class="sliders">
-    <input type="range" id="slider1" min="0" max="100" value="0">
-    <input type="range" id="slider2" min="0" max="100" value="0">
+    <input type="range" id="slider1" min="0" max="100" value="50">
+    <input type="range" id="slider2" min="0" max="100" value="50">
   </div>
-  <button id="btn-kick" class="btn">⚡</button>
+  <button id="btn-kick" class="btn"></button>
 </div>
 
 <script type="importmap">
