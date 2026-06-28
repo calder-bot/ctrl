@@ -34,10 +34,10 @@ import { goalColorTo } from '../../lib/colors.js';
 
 // ─── Surface equation ───────────────────────────────────────────────
 
-function potential(x, y, s1, s2) {
-  const a1 = (s1 - 50) / 50;  // -1 to +1
-  const a2 = (s2 - 50) / 50;
+// The global well bottom is pinned to a fixed Z value regardless of sliders.
+const GLOBAL_WELL_TARGET = -4.5;
 
+function _potentialRaw(x, y, a1, a2) {
   const lx = x + 0.8, ly = y + 0.8;
   const gx = x - 1.0, gy = y - 1.0;
   const r2L = lx * lx + ly * ly;
@@ -61,10 +61,22 @@ function potential(x, y, s1, s2) {
   const boundary = 0.08 * r2;
 
   // s1: tilt along the local→global diagonal
-  // s1 > 50 → raises the local-well side, lowers the global side
-  const tilt = -1.4 * a1 * along;
+  // Asymmetric: strong when raising local side (a1>0), gentle when lowering (a1<0)
+  const tiltScale = a1 >= 0 ? 1.4 : 0.5;
+  const tilt = -tiltScale * a1 * along;
 
   return localWell + globalWell + ridge + boundary + tilt;
+}
+
+function potential(x, y, s1, s2) {
+  const a1 = (s1 - 50) / 50;
+  const a2 = (s2 - 50) / 50;
+
+  // Pin the global well bottom to a fixed Z position
+  const globalRef = _potentialRaw(1.0, 1.0, a1, a2);
+  const offset = GLOBAL_WELL_TARGET - globalRef;
+
+  return _potentialRaw(x, y, a1, a2) + offset;
 }
 
 // ─── Configuration ──────────────────────────────────────────────────
