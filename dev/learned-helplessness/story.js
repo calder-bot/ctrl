@@ -111,6 +111,10 @@ const CAMERA_OPTS = {
 // Low-pass filter time constant (seconds)
 const FILTER_TAU = 1.0;
 
+// Pre-allocated ball colors (avoid per-frame allocations)
+const _ballGoalColor = new THREE.Color(40 / 255, 200 / 255, 80 / 255);
+const _ballSufferColor = new THREE.Color(1.0, 0.4, 0.15);
+
 // ─── Low-pass filter ────────────────────────────────────────────────
 
 class LowPass {
@@ -396,8 +400,8 @@ function animate() {
   ballLight.position.set(bx, visualH + BALL_RADIUS + 0.3, by);
 
   // Color ball by its zone
-  const goalColor = new THREE.Color(40 / 255, 200 / 255, 80 / 255);
-  const sufferColor = new THREE.Color(1.0, 0.4, 0.15);
+  const goalColor = _ballGoalColor;
+  const sufferColor = _ballSufferColor;
   // If ball is near the global minimum, it turns green
   const distToGoal = Math.sqrt((bx - 1) ** 2 + (by - 1) ** 2);
   if (distToGoal < 0.5) {
