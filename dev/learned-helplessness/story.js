@@ -75,9 +75,9 @@ const BALL_START = [-0.8, -0.8];
 const BALL_RADIUS = 0.12;
 const HEIGHT_SCALE = 0.45;
 
-// Green zone: bottom slice ~1 ball-diameter tall in visual space
-// In unscaled potential: 0.6 units → 0.6 * HEIGHT_SCALE = 0.27 visual units ≈ 1 ball diameter
-const GOAL_BAND = 0.6;
+// Color midpoint: the local well's default height (~-1.5) maps to orange.
+// Below = green→orange (the goal bowl), above = orange→red (suffering).
+const COLOR_MID = -1.5;
 
 const PHYSICS_OPTS = {
   gravity: 30,
@@ -125,10 +125,9 @@ let slider1, slider2, kickBtn, resetBtn;
 let clock;
 let lpS1, lpS2; // low-pass filtered slider values
 
-// Color function: green goal zone at bottom, orange→red above
+// Color function: green→orange below midpoint, orange→red above
 function surfaceColorFn(out, value, min, max) {
-  const goalThreshold = min + GOAL_BAND;
-  return goalColorTo(out, value, goalThreshold, max);
+  return goalColorTo(out, value, COLOR_MID, min, max);
 }
 
 export function init() {
