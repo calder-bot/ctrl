@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Learned Helplessness</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: #000; color: #ccc;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+}
+
+#top-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 24px;
+  pointer-events: none;
+}
+
+#top-bar > * { pointer-events: auto; }
+
+.title {
+  font-size: 11px; letter-spacing: 6px; color: #666;
+  text-transform: uppercase;
+}
+
+#canvas-container {
+  position: fixed; inset: 0;
+}
+
+canvas { display: block; }
+
+/* ─── Controls ─── */
+
+#controls {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+  display: flex; align-items: flex-end; gap: 12px;
+  padding: 20px 24px;
+  padding-bottom: max(20px, env(safe-area-inset-bottom, 20px));
+}
+
+.sliders {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  background: #222;
+  border-radius: 4px;
+  outline: none;
+  touch-action: pan-x;
+}
+
+#slider1::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #6b8aff; cursor: pointer;
+  border: 2px solid #000;
+  box-shadow: 0 0 8px rgba(107, 138, 255, 0.4);
+}
+#slider1::-moz-range-thumb {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #6b8aff; cursor: pointer;
+  border: 2px solid #000;
+  box-shadow: 0 0 8px rgba(107, 138, 255, 0.4);
+}
+
+#slider2::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #8a6bff; cursor: pointer;
+  border: 2px solid #000;
+  box-shadow: 0 0 8px rgba(138, 107, 255, 0.4);
+}
+#slider2::-moz-range-thumb {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #8a6bff; cursor: pointer;
+  border: 2px solid #000;
+  box-shadow: 0 0 8px rgba(138, 107, 255, 0.4);
+}
+
+/* ─── Buttons ─── */
+
+.btn {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: #111; border: 2px solid #333;
+  color: #ccc; font-size: 22px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+
+.btn:hover { background: #1a1a1a; border-color: #444; }
+.btn:active { transform: scale(0.92); }
+
+#btn-kick {
+  border-color: #ff6b8a;
+  color: #ff6b8a;
+  font-size: 18px;
+}
+#btn-kick:hover { background: #1f0a0f; }
+#btn-kick.pulse {
+  background: rgba(255, 107, 138, 0.2);
+  box-shadow: 0 0 20px rgba(255, 107, 138, 0.4);
+}
+
+#btn-reset {
+  position: fixed; top: 16px; right: 24px; z-index: 10;
+  width: 32px; height: 32px;
+  font-size: 14px; color: #555; border-color: #222;
+  background: transparent;
+}
+#btn-reset:hover { color: #ff6b8a; border-color: #444; }
+
+@media (max-width: 600px) {
+  #top-bar { padding: 10px 16px; }
+  .title { font-size: 9px; letter-spacing: 4px; }
+  #controls { padding: 14px 16px; }
+  .btn { width: 48px; height: 48px; }
+  #btn-reset { top: 10px; right: 16px; }
+}
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <div class="title">Learned Helplessness</div>
+</div>
+<button id="btn-reset" class="btn">&#8634;</button>
+
+<div id="canvas-container"></div>
+
+<div id="controls">
+  <div class="sliders">
+    <input type="range" id="slider1" min="0" max="100" value="0">
+    <input type="range" id="slider2" min="0" max="100" value="0">
+  </div>
+  <button id="btn-kick" class="btn">⚡</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module" src="story.js"></script>
+</body>
+</html>
