@@ -88,11 +88,15 @@ const PHYSICS_OPTS = {
   bounds: [-2.0, 2.0],
 };
 
+const HEIGHT_SCALE = 0.45; // flatten the surface so the interior is visible
+
 const CAMERA_OPTS = {
-  radius: 8,
+  radius: 11,
+  radiusMin: 5,
+  radiusMax: 25,
   defaultPhi: Math.PI / 3,
   autoSpeed: 0.1,
-  target: new THREE.Vector3(0, -1.5, 0),
+  target: new THREE.Vector3(0, -0.8, 0),
 };
 
 // ─── Init ───────────────────────────────────────────────────────────
@@ -141,7 +145,12 @@ export function init() {
   // Surface mesh
   surfaceMesh = createSurfaceMesh(
     (x, y) => potential(x, y, 0, 0),
-    { xRange: SURFACE_RANGE, yRange: SURFACE_RANGE, resolution: SURFACE_RES }
+    {
+      xRange: SURFACE_RANGE, yRange: SURFACE_RANGE,
+      resolution: SURFACE_RES,
+      heightScale: HEIGHT_SCALE,
+      opacity: 0.85,
+    }
   );
   scene.add(surfaceMesh);
   _updateHeightRange();
@@ -261,13 +270,14 @@ function animate() {
     physics.step(subDt);
   }
 
-  // Ball position
+  // Ball position (visual height matches scaled surface)
   const bx = physics.x;
   const by = physics.y;
   const bh = physics.height();
-  ballMesh.position.set(bx, bh + BALL_RADIUS, by);
+  const visualH = bh * HEIGHT_SCALE;
+  ballMesh.position.set(bx, visualH + BALL_RADIUS, by);
   ballGlow.position.copy(ballMesh.position);
-  ballLight.position.set(bx, bh + BALL_RADIUS + 0.3, by);
+  ballLight.position.set(bx, visualH + BALL_RADIUS + 0.3, by);
 
   // Color ball by depth
   const c = depthColor(bh, heightRange.min, heightRange.max);
