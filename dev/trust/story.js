@@ -5,8 +5,12 @@
  * marble enters from edge, physics settles it. Surfaces separate
  * to show individual contributions. Bar history tracks your journey.
  *
- * Procedurally generated person surfaces (seeded RNG).
- * Player surface is fixed (green, 3 wells).
+ * Features:
+ * - Procedurally generated person surfaces (seeded RNG)
+ * - Constraint lines (religion/boundaries) on person surfaces
+ * - Occlusion (fog of war) on person surfaces
+ * - BallPhysics from lib/physics.js (gravity=30, damping=7)
+ * - Player surface is fixed (green, 3 wells)
  */
 
 import * as THREE from 'three';
@@ -43,6 +47,7 @@ const SETTLE_PAUSE = 1.0;
 const BAR_MIN_H = 6;
 const BAR_MAX_H = 56;
 const Z_NORM = 5.0;
+const CONSTRAINT_COLOR = 0xffaa00;
 
 // ─── Player surface (fixed, green) ──────────────────────────────────
 
@@ -63,7 +68,6 @@ function evalG(gs, x, y) {
 
 const evalPlayer = (x, y) => evalG(PLAYER_G, x, y);
 
-// Find player's global minimum by grid search
 function findMin(fn) {
   let mz = Infinity, mx = 0, my = 0;
   for (let x = -2; x <= 2; x += 0.02)
@@ -80,6 +84,9 @@ const playerMin = findMin(evalPlayer);
 
 let personG = null;
 let personColor = null;
+let personConstraints = [];
+let personOcclusion = null;
+let constraintSides = [];
 
 const evalPerson = (x, y) => evalG(personG, x, y);
 const evalCombined = (x, y) => evalPlayer(x, y) + evalPerson(x, y);
@@ -101,8 +108,170 @@ function genSurface(rng) {
 
 function genColor(rng) {
   let h;
-  do { h = rng(); } while (h > 0.22 && h < 0.44); // avoid green
+  do { h = rng(); } while (h > 0.22 && h < 0.44);
   return new THREE.Color().setHSL(h, 0.65, 0.55);
+}
+
+// ─── Constraint generation ──────────────────────────────────────────
+
+function genConstraints(rng, gaussians) {
+  const roll = rng();
+  let count;
+  if (roll < 0.70) count = 0;
+  else if (roll < 0.90) count = 1;
+  else if (roll < 0.97) count = 2;
+  else count = 3;
+
+  const constraints = [];
+  for (let i = 0; i < count; i++) {
+    let a, b, c, ok, n = 0;
+    do {
+      const theta = rng() * Math.PI;
+      a = Math.cos(theta);
+      b = Math.sin(theta);
+      c = (rng() - 0.5) * 2.4;
+
+      ok = true;
+      // Check distance from other constraints
+      for (const prev of constraints) {
+        const cross = Math.abs(a * prev.b - b * prev.a);
+        if (cross < 0.3) {
+          // Near-parallel — check separation
+          if (Math.abs(c - prev.c) < 0.8) { ok = false; break; }
+        }
+      }
+      // Check not too close to gaussian centers
+      for (const g of gaussians) {
+        const norm = Math.sqrt(a * a + b * b);
+        const dist = Math.abs(a * g.cx + b * g.cy - c) / norm;
+        if (dist < 0.3) { ok = false; break; }
+      }
+    } while (!ok && ++n < 50);
+
+    if (n < 50) constraints.push({ a, b, c });
+  }
+  return constraints;
+}
+
+// ─── Occlusion generation ───────────────────────────────────────────
+
+function genOcclusion(rng) {
+  if (rng() > 0.5) return null;
+  return {
+    cx: -0.8 + rng() * 1.6,
+    cy: -0.8 + rng() * 1.6,
+    radius: 0.8 + rng() * 1.2,
+  };
+}
+
+function applyOcclusion(mesh, occ) {
+  if (!occ) return;
+  const pos = mesh.geometry.attributes.position;
+  const color = mesh.geometry.attributes.color;
+  const { _xRange, _yRange } = mesh.userData;
+  const xMin = _xRange[0], xSize = _xRange[1] - _xRange[0];
+  const yMin = _yRange[0], ySize = _yRange[1] - _yRange[0];
+
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i);
+    const pz = pos.getZ(i);
+    const fx = xMin + ((px + xSize / 2) / xSize) * xSize;
+    const fy = yMin + ((pz + ySize / 2) / ySize) * ySize;
+
+    const dist = Math.hypot(fx - occ.cx, fy - occ.cy);
+    if (dist > occ.radius) {
+      const fog = Math.min(1, (dist - occ.radius) / 0.5);
+      const r = color.getX(i), g = color.getY(i), b = color.getZ(i);
+      color.setXYZ(i,
+        r + (0.12 - r) * fog,
+        g + (0.12 - g) * fog,
+        b + (0.12 - b) * fog
+      );
+    }
+  }
+  color.needsUpdate = true;
+}
+
+// ─── Constraint line visualization ──────────────────────────────────
+
+function sampleLine(a, b, c, lo, hi, steps) {
+  const pts = [];
+  if (Math.abs(b) >= Math.abs(a)) {
+    for (let i = 0; i <= steps; i++) {
+      const x = lo + (hi - lo) * i / steps;
+      const y = (c - a * x) / b;
+      if (y >= lo && y <= hi) pts.push({ x, y });
+    }
+  } else {
+    for (let i = 0; i <= steps; i++) {
+      const y = lo + (hi - lo) * i / steps;
+      const x = (c - b * y) / a;
+      if (x >= lo && x <= hi) pts.push({ x, y });
+    }
+  }
+  return pts;
+}
+
+const constraintGroup = new THREE.Group();
+let constraintLineData = [];
+
+function buildConstraintLines() {
+  for (const cl of constraintLineData) {
+    constraintGroup.remove(cl.mesh);
+    cl.mesh.geometry.dispose();
+    cl.mesh.material.dispose();
+  }
+  constraintLineData = [];
+
+  for (const { a, b, c } of personConstraints) {
+    const pts = sampleLine(a, b, c, -2, 2, 40);
+    if (pts.length < 2) continue;
+
+    const positions = new Float32Array(pts.length * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: CONSTRAINT_COLOR, transparent: true, opacity: 0.8,
+    });
+    const mesh = new THREE.Line(geo, mat);
+    constraintGroup.add(mesh);
+    constraintLineData.push({ points: pts, mesh, positions });
+  }
+}
+
+function updateConstraintPositions(evalFn, yOff) {
+  for (const cl of constraintLineData) {
+    for (let i = 0; i < cl.points.length; i++) {
+      const { x, y } = cl.points[i];
+      const h = evalFn(x, y) * H_SCALE;
+      cl.positions[i * 3] = x;
+      cl.positions[i * 3 + 1] = h + yOff + 0.06;
+      cl.positions[i * 3 + 2] = y;
+    }
+    cl.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
+// ─── Constraint physics ─────────────────────────────────────────────
+
+function enforceConstraints() {
+  for (let i = 0; i < personConstraints.length; i++) {
+    const { a, b, c } = personConstraints[i];
+    const norm = Math.sqrt(a * a + b * b);
+    const nx = a / norm, ny = b / norm;
+    const dist = (a * physics.x + b * physics.y - c) / norm;
+    const side = constraintSides[i];
+
+    if (side !== 0 && Math.sign(dist) !== side) {
+      physics.x -= dist * nx;
+      physics.y -= dist * ny;
+      const vn = physics.vx * nx + physics.vy * ny;
+      physics.vx -= 2 * vn * nx;
+      physics.vy -= 2 * vn * ny;
+      physics.vx *= 0.5;
+      physics.vy *= 0.5;
+    }
+  }
 }
 
 // ─── Color functions ─────────────────────────────────────────────────
@@ -167,6 +336,8 @@ const orbit = new OrbitController(camera, renderer.domElement, {
 
 personG = genSurface(rng);
 personColor = genColor(rng);
+personConstraints = genConstraints(rng, personG);
+personOcclusion = genOcclusion(rng);
 
 const playerMesh = createSurfaceMesh(evalPlayer, {
   xRange: RANGE, yRange: RANGE, resolution: RES,
@@ -191,6 +362,8 @@ const combinedMesh = createSurfaceMesh(evalCombined, {
 combinedMesh.visible = false;
 combinedMesh.renderOrder = 2;
 scene.add(combinedMesh);
+
+scene.add(constraintGroup);
 
 // Marble
 const marbleMat = new THREE.MeshPhongMaterial({
@@ -220,7 +393,7 @@ const trailMat = new THREE.LineBasicMaterial({
 const trailLine = new THREE.Line(trailGeo, trailMat);
 scene.add(trailLine);
 
-// Ghost marbles (shown during/after separation)
+// Ghost marbles
 const ghostGeo = new THREE.SphereGeometry(BALL_R * 0.8, 16, 16);
 const ghostPMat = new THREE.MeshPhongMaterial({
   color: 0x4ade80, transparent: true, opacity: 0.7,
@@ -256,9 +429,18 @@ function initRound() {
   if (round > 0) {
     personG = genSurface(rng);
     personColor = genColor(rng);
+    personConstraints = genConstraints(rng, personG);
+    personOcclusion = genOcclusion(rng);
     otherMesh.userData._colorFn = personCF(personColor);
     updateSurfaceMesh(otherMesh, evalPerson);
+    applyOcclusion(otherMesh, personOcclusion);
+  } else {
+    applyOcclusion(otherMesh, personOcclusion);
   }
+
+  // Build constraint line visuals
+  buildConstraintLines();
+  updateConstraintPositions(evalPerson, 1.4);
 
   playerMesh.visible = true;
   playerMesh.position.y = -1.2;
@@ -271,6 +453,7 @@ function initRound() {
   ghostP.visible = ghostO.visible = false;
   trailGeo.setDrawRange(0, 0);
   flashEl.style.opacity = '0';
+  constraintGroup.visible = true;
 
   roundEl.textContent = round + 1;
   setButtons(true);
@@ -299,7 +482,7 @@ function enterMarble() {
     bounds: [-1.9, 1.9], kickForce: 3,
   });
 
-  // Spawn from random edge with velocity toward center
+  // Spawn from random edge
   const edge = Math.floor(rng() * 4);
   const pos = -1.2 + rng() * 2.4;
   const spd = 2.5 + rng() * 1.5;
@@ -310,9 +493,15 @@ function enterMarble() {
   else if (edge === 2) { physics.x = pos;  physics.y = -1.8; physics.vx = spr; physics.vy = spd; }
   else                 { physics.x = pos;  physics.y = 1.8;  physics.vx = spr; physics.vy = -spd; }
 
-  marbleMesh.visible = true;
+  // Record which side of each constraint the marble starts on
+  constraintSides = personConstraints.map(({ a, b, c }) =>
+    Math.sign(a * physics.x + b * physics.y - c)
+  );
 
-  // Color marble by choice
+  // Update constraint lines to follow combined surface
+  updateConstraintPositions(evalCombined, 0);
+
+  marbleMesh.visible = true;
   const cc = choice === 'trust' ? 0x4ade80 : 0xf87171;
   marbleMat.emissive.setHex(cc);
   glowMat.color.setHex(cc);
@@ -324,11 +513,10 @@ function enterSeparate() {
   phase = 'SEPARATING';
   phaseStart = performance.now();
 
-  // Compute Z-distance on player surface
   const zHere = evalPlayer(finalX, finalY);
-  const zDist = zHere - playerMin.z; // always >= 0
+  const zDist = zHere - playerMin.z;
 
-  // Add bar to history
+  // Add bar
   const bar = document.createElement('div');
   bar.className = 'bar';
   const norm = Math.min(1, zDist / Z_NORM);
@@ -337,12 +525,12 @@ function enterSeparate() {
   barBox.appendChild(bar);
   barBox.scrollLeft = barBox.scrollWidth;
 
-  // Result flash
+  // Flash
   flashNum.textContent = zDist.toFixed(1);
   flashSub.textContent = choice === 'trust' ? 'TRUSTED' : 'PASSED';
   flashEl.style.opacity = '1';
 
-  // Prepare ghost marbles
+  // Ghost marbles
   ghostP.visible = ghostO.visible = true;
   ghostOMat.color.copy(personColor);
   ghostOMat.emissive.copy(personColor);
@@ -362,15 +550,17 @@ function animate(now) {
   lastT = now;
   orbit.update(dt);
 
-  // ── MERGING: surfaces slide together vertically ──
+  // ── MERGING ──
   if (phase === 'MERGING') {
     const t = Math.min(1, (now - phaseStart) / MERGE_MS);
-    const e = t * t * (3 - 2 * t); // smoothstep
+    const e = t * t * (3 - 2 * t);
 
     playerMesh.position.y = -1.2 + e * 1.2;
     otherMesh.position.y = 1.4 - e * 1.4;
 
-    // Last 30%: crossfade to combined surface
+    // Constraint lines follow person surface down
+    updateConstraintPositions(evalPerson, otherMesh.position.y);
+
     if (t > 0.7) {
       const ft = (t - 0.7) / 0.3;
       playerMesh.material.opacity = 0.9 * (1 - ft);
@@ -387,16 +577,16 @@ function animate(now) {
     }
   }
 
-  // ── MARBLE: real-time physics on combined surface ──
+  // ── MARBLE ──
   if (phase === 'MARBLE') {
     if (!settled) {
       physics.step(dt);
+      enforceConstraints();
       marbleTime += dt;
 
       const h = evalCombined(physics.x, physics.y) * H_SCALE;
       marbleMesh.position.set(physics.x, h + BALL_R, physics.y);
 
-      // Record trail
       if (trailIdx < MAX_TRAIL) {
         const tp = trailGeo.attributes.position;
         tp.setXYZ(trailIdx, physics.x, h + BALL_R * 0.5, physics.y);
@@ -404,7 +594,6 @@ function animate(now) {
         trailGeo.setDrawRange(0, ++trailIdx);
       }
 
-      // Settle detection
       const spd = Math.hypot(physics.vx, physics.vy);
       if (spd < SETTLE_SPEED) settledFrames++;
       else settledFrames = 0;
@@ -416,14 +605,13 @@ function animate(now) {
         finalY = physics.y;
       }
     } else {
-      // Pause with marble at rest before scoring
       if ((now - settleTime) / 1000 > SETTLE_PAUSE) {
         enterSeparate();
       }
     }
   }
 
-  // ── SEPARATING: surfaces pull apart, ghost marbles track ──
+  // ── SEPARATING ──
   if (phase === 'SEPARATING') {
     const t = Math.min(1, (now - phaseStart) / SEPARATE_MS);
     const e = t * t * (3 - 2 * t);
@@ -439,7 +627,9 @@ function animate(now) {
     combinedMesh.material.opacity = 0.85 * (1 - e);
     if (e >= 1) combinedMesh.visible = false;
 
-    // Ghost marbles sit on their respective surfaces
+    // Constraint lines follow person surface
+    updateConstraintPositions(evalPerson, otherMesh.position.y);
+
     ghostP.position.set(finalX, playerMesh.position.y + ghostP.userData._sh + BALL_R, finalY);
     ghostO.position.set(finalX, otherMesh.position.y + ghostO.userData._sh + BALL_R, finalY);
 
@@ -450,9 +640,8 @@ function animate(now) {
     }
   }
 
-  // ── POST: hold result view, then next round ──
+  // ── POST ──
   if (phase === 'POST') {
-    // Keep ghost marbles positioned
     ghostP.position.set(finalX, playerMesh.position.y + ghostP.userData._sh + BALL_R, finalY);
     ghostO.position.set(finalX, otherMesh.position.y + ghostO.userData._sh + BALL_R, finalY);
 
