@@ -34,7 +34,7 @@ function mulberry32(seed) {
 
 const RANGE = [-2, 2];
 const RES = 80;
-const H_SCALE = 0.6;
+const H_SCALE = 0.3;
 const BALL_R = 0.1;
 const MAX_TRAIL = 600;
 const MERGE_MS = 900;
@@ -50,11 +50,11 @@ const Z_NORM = 5.0;
 const CONSTRAINT_COLOR = 0xffaa00;
 
 // ─── Player surface (fixed, green) ──────────────────────────────────
+// 1 global minimum + 1 local minimum = saddle point emerges between them
 
 const PLAYER_G = [
-  { cx: -0.5, cy: -0.5, depth: -3.5, sigma: 0.7 },
-  { cx: 0.8,  cy: -0.3, depth: -2.5, sigma: 0.8 },
-  { cx: -0.3, cy: 1.0,  depth: -2.0, sigma: 0.6 },
+  { cx: -0.5, cy: -0.4, depth: -4.0, sigma: 0.8 },  // deep global minimum
+  { cx: 0.9,  cy: 0.8,  depth: -2.0, sigma: 0.6 },   // shallow local minimum
 ];
 
 function evalG(gs, x, y) {
@@ -192,6 +192,68 @@ function applyOcclusion(mesh, occ) {
   color.needsUpdate = true;
 }
 
+// ─── Grid (surface-following wireframe) ─────────────────────────────
+
+function createGrid(evalFn) {
+  const lines = 10, detail = 60;
+  const [lo, hi] = RANGE;
+  const step = (hi - lo) / lines;
+  const points = [];
+
+  for (let i = 0; i <= lines; i++) {
+    const x = lo + i * step;
+    for (let j = 0; j < detail; j++) {
+      const y1 = lo + (j / detail) * (hi - lo);
+      const y2 = lo + ((j + 1) / detail) * (hi - lo);
+      points.push(new THREE.Vector3(x, evalFn(x, y1) * H_SCALE + 0.01, y1));
+      points.push(new THREE.Vector3(x, evalFn(x, y2) * H_SCALE + 0.01, y2));
+    }
+  }
+  for (let i = 0; i <= lines; i++) {
+    const y = lo + i * step;
+    for (let j = 0; j < detail; j++) {
+      const x1 = lo + (j / detail) * (hi - lo);
+      const x2 = lo + ((j + 1) / detail) * (hi - lo);
+      points.push(new THREE.Vector3(x1, evalFn(x1, y) * H_SCALE + 0.01, y));
+      points.push(new THREE.Vector3(x2, evalFn(x2, y) * H_SCALE + 0.01, y));
+    }
+  }
+
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.12,
+  });
+  return new THREE.LineSegments(geo, mat);
+}
+
+function updateGrid(grid, evalFn) {
+  const pos = grid.geometry.attributes.position;
+  const lines = 10, detail = 60;
+  const [lo, hi] = RANGE;
+  const step = (hi - lo) / lines;
+  let idx = 0;
+
+  for (let i = 0; i <= lines; i++) {
+    const x = lo + i * step;
+    for (let j = 0; j < detail; j++) {
+      const y1 = lo + (j / detail) * (hi - lo);
+      const y2 = lo + ((j + 1) / detail) * (hi - lo);
+      pos.setY(idx++, evalFn(x, y1) * H_SCALE + 0.01);
+      pos.setY(idx++, evalFn(x, y2) * H_SCALE + 0.01);
+    }
+  }
+  for (let i = 0; i <= lines; i++) {
+    const y = lo + i * step;
+    for (let j = 0; j < detail; j++) {
+      const x1 = lo + (j / detail) * (hi - lo);
+      const x2 = lo + ((j + 1) / detail) * (hi - lo);
+      pos.setY(idx++, evalFn(x1, y) * H_SCALE + 0.01);
+      pos.setY(idx++, evalFn(x2, y) * H_SCALE + 0.01);
+    }
+  }
+  pos.needsUpdate = true;
+}
+
 // ─── Constraint line visualization ──────────────────────────────────
 
 function sampleLine(a, b, c, lo, hi, steps) {
@@ -227,29 +289,98 @@ function buildConstraintLines() {
     const pts = sampleLine(a, b, c, -2, 2, 40);
     if (pts.length < 2) continue;
 
-    const positions = new Float32Array(pts.length * 3);
+    // Wall: two lines at surface height and above it
+    const positions = new Float32Array(pts.length * 2 * 3);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const mat = new THREE.LineBasicMaterial({
-      color: CONSTRAINT_COLOR, transparent: true, opacity: 0.8,
+      color: CONSTRAINT_COLOR, transparent: true, opacity: 0.9,
+      linewidth: 2,
     });
-    const mesh = new THREE.Line(geo, mat);
+    const mesh = new THREE.LineSegments(geo, mat);
     constraintGroup.add(mesh);
-    constraintLineData.push({ points: pts, mesh, positions });
+
+    // Base line on surface
+    const basePosArr = new Float32Array(pts.length * 3);
+    const baseGeo = new THREE.BufferGeometry();
+    baseGeo.setAttribute('position', new THREE.BufferAttribute(basePosArr, 3));
+    const baseMat = new THREE.LineBasicMaterial({
+      color: CONSTRAINT_COLOR, transparent: true, opacity: 0.6,
+    });
+    const baseMesh = new THREE.Line(baseGeo, baseMat);
+    constraintGroup.add(baseMesh);
+
+    constraintLineData.push({
+      points: pts, mesh, positions,
+      baseMesh, basePositions: basePosArr,
+      constraint: { a, b, c },
+    });
   }
 }
+
+const WALL_HEIGHT = 0.25;
 
 function updateConstraintPositions(evalFn, yOff) {
   for (const cl of constraintLineData) {
     for (let i = 0; i < cl.points.length; i++) {
       const { x, y } = cl.points[i];
       const h = evalFn(x, y) * H_SCALE;
-      cl.positions[i * 3] = x;
-      cl.positions[i * 3 + 1] = h + yOff + 0.06;
-      cl.positions[i * 3 + 2] = y;
+      // Wall segments: vertical lines from surface to surface+WALL_HEIGHT
+      cl.positions[i * 6 + 0] = x;
+      cl.positions[i * 6 + 1] = h + yOff + 0.02;
+      cl.positions[i * 6 + 2] = y;
+      cl.positions[i * 6 + 3] = x;
+      cl.positions[i * 6 + 4] = h + yOff + WALL_HEIGHT;
+      cl.positions[i * 6 + 5] = y;
+      // Base line
+      cl.basePositions[i * 3 + 0] = x;
+      cl.basePositions[i * 3 + 1] = h + yOff + WALL_HEIGHT;
+      cl.basePositions[i * 3 + 2] = y;
     }
     cl.mesh.geometry.attributes.position.needsUpdate = true;
+    cl.baseMesh.geometry.attributes.position.needsUpdate = true;
   }
+}
+
+// ─── Constraint gray-out on person surface ──────────────────────────
+
+function applyConstraintGrayOut(mesh, constraints) {
+  if (constraints.length === 0) return;
+  const pos = mesh.geometry.attributes.position;
+  const color = mesh.geometry.attributes.color;
+
+  // For each constraint, determine the "active" side (side with more
+  // surface area / the side nearest a gaussian center) and gray out
+  // the other side
+  for (const { a, b, c } of constraints) {
+    const norm = Math.sqrt(a * a + b * b);
+    // Pick the side that contains the deepest well center
+    let bestSide = 1;
+    let bestDepth = 0;
+    for (const g of personG) {
+      const side = Math.sign(a * g.cx + b * g.cy - c);
+      if (side !== 0 && Math.abs(g.depth) > bestDepth) {
+        bestDepth = Math.abs(g.depth);
+        bestSide = side;
+      }
+    }
+
+    for (let i = 0; i < pos.count; i++) {
+      const px = pos.getX(i);
+      const pz = pos.getZ(i);
+      const side = Math.sign(a * px + b * pz - c);
+      if (side !== bestSide && side !== 0) {
+        const r = color.getX(i), g = color.getY(i), bl = color.getZ(i);
+        // Gray out: lerp toward dark gray
+        color.setXYZ(i,
+          r * 0.3 + 0.08,
+          g * 0.3 + 0.08,
+          bl * 0.3 + 0.08
+        );
+      }
+    }
+  }
+  color.needsUpdate = true;
 }
 
 // ─── Constraint physics ─────────────────────────────────────────────
@@ -365,6 +496,19 @@ scene.add(combinedMesh);
 
 scene.add(constraintGroup);
 
+// Grids
+const playerGrid = createGrid(evalPlayer);
+playerGrid.position.y = -1.2;
+scene.add(playerGrid);
+
+let otherGrid = createGrid(evalPerson);
+otherGrid.position.y = 1.4;
+scene.add(otherGrid);
+
+let combinedGrid = createGrid(evalCombined);
+combinedGrid.visible = false;
+scene.add(combinedGrid);
+
 // Marble
 const marbleMat = new THREE.MeshPhongMaterial({
   color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.4, shininess: 100,
@@ -434,8 +578,16 @@ function initRound() {
     otherMesh.userData._colorFn = personCF(personColor);
     updateSurfaceMesh(otherMesh, evalPerson);
     applyOcclusion(otherMesh, personOcclusion);
+    applyConstraintGrayOut(otherMesh, personConstraints);
+    // Rebuild other grid
+    scene.remove(otherGrid);
+    otherGrid.geometry.dispose(); otherGrid.material.dispose();
+    otherGrid = createGrid(evalPerson);
+    otherGrid.position.y = 1.4;
+    scene.add(otherGrid);
   } else {
     applyOcclusion(otherMesh, personOcclusion);
+    applyConstraintGrayOut(otherMesh, personConstraints);
   }
 
   // Build constraint line visuals
@@ -445,10 +597,15 @@ function initRound() {
   playerMesh.visible = true;
   playerMesh.position.y = -1.2;
   playerMesh.material.opacity = 0.9;
+  playerGrid.visible = true;
+  playerGrid.position.y = -1.2;
   otherMesh.visible = true;
   otherMesh.position.y = 1.4;
   otherMesh.material.opacity = 0.55;
+  otherGrid.visible = true;
+  otherGrid.position.y = 1.4;
   combinedMesh.visible = false;
+  combinedGrid.visible = false;
   marbleMesh.visible = false;
   ghostP.visible = ghostO.visible = false;
   trailGeo.setDrawRange(0, 0);
@@ -465,6 +622,12 @@ function onChoice(c) {
   choice = c;
   setButtons(false);
   updateSurfaceMesh(combinedMesh, evalCombined);
+  // Rebuild combined grid
+  scene.remove(combinedGrid);
+  combinedGrid.geometry.dispose(); combinedGrid.material.dispose();
+  combinedGrid = createGrid(evalCombined);
+  combinedGrid.visible = false;
+  scene.add(combinedGrid);
   phase = 'MERGING';
   phaseStart = performance.now();
 }
@@ -478,15 +641,15 @@ function enterMarble() {
   trailIdx = 0;
 
   physics = new BallPhysics(evalCombined, {
-    gravity: 30, damping: 7, mass: 1.0, maxDt: 0.03,
-    bounds: [-1.9, 1.9], kickForce: 3,
+    gravity: 15, damping: 5, mass: 1.0, maxDt: 0.03,
+    bounds: [-1.9, 1.9], kickForce: 2,
   });
 
   // Spawn from random edge
   const edge = Math.floor(rng() * 4);
   const pos = -1.2 + rng() * 2.4;
-  const spd = 2.5 + rng() * 1.5;
-  const spr = (rng() - 0.5) * 1.5;
+  const spd = 1.5 + rng() * 1.5;
+  const spr = (rng() - 0.5) * 1.0;
 
   if (edge === 0)      { physics.x = -1.8; physics.y = pos; physics.vx = spd;  physics.vy = spr; }
   else if (edge === 1) { physics.x = 1.8;  physics.y = pos; physics.vx = -spd; physics.vy = spr; }
@@ -556,7 +719,9 @@ function animate(now) {
     const e = t * t * (3 - 2 * t);
 
     playerMesh.position.y = -1.2 + e * 1.2;
+    playerGrid.position.y = playerMesh.position.y;
     otherMesh.position.y = 1.4 - e * 1.4;
+    otherGrid.position.y = otherMesh.position.y;
 
     // Constraint lines follow person surface down
     updateConstraintPositions(evalPerson, otherMesh.position.y);
@@ -564,9 +729,12 @@ function animate(now) {
     if (t >= 1) {
       // Surfaces have fully slid together — swap to combined
       playerMesh.visible = false;
+      playerGrid.visible = false;
       otherMesh.visible = false;
+      otherGrid.visible = false;
       combinedMesh.visible = true;
       combinedMesh.material.opacity = 0.85;
+      combinedGrid.visible = true;
       enterMarble();
     }
   }
@@ -614,12 +782,17 @@ function animate(now) {
     if (!playerMesh.visible) {
       playerMesh.visible = true;
       playerMesh.material.opacity = 0.9;
+      playerGrid.visible = true;
       otherMesh.visible = true;
       otherMesh.material.opacity = 0.55;
+      otherGrid.visible = true;
       combinedMesh.visible = false;
+      combinedGrid.visible = false;
     }
     playerMesh.position.y = -1.2 * e;
+    playerGrid.position.y = playerMesh.position.y;
     otherMesh.position.y = 1.4 * e;
+    otherGrid.position.y = otherMesh.position.y;
 
     // Constraint lines follow person surface
     updateConstraintPositions(evalPerson, otherMesh.position.y);
@@ -628,7 +801,6 @@ function animate(now) {
     ghostO.position.set(finalX, otherMesh.position.y + ghostO.userData._sh + BALL_R, finalY);
 
     if (t >= 1) {
-      combinedMesh.visible = false;
       phase = 'POST';
       phaseStart = now;
     }
