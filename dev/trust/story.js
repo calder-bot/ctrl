@@ -525,9 +525,9 @@ function enterSeparate() {
   barBox.appendChild(bar);
   barBox.scrollLeft = barBox.scrollWidth;
 
-  // Flash
-  flashNum.textContent = zDist.toFixed(1);
-  flashSub.textContent = choice === 'trust' ? 'TRUSTED' : 'PASSED';
+  // Flash — no numeric score, just the label
+  flashNum.textContent = choice === 'trust' ? 'TRUSTED' : 'PASSED';
+  flashSub.textContent = '';
   flashEl.style.opacity = '1';
 
   // Ghost marbles
@@ -561,17 +561,11 @@ function animate(now) {
     // Constraint lines follow person surface down
     updateConstraintPositions(evalPerson, otherMesh.position.y);
 
-    if (t > 0.7) {
-      const ft = (t - 0.7) / 0.3;
-      playerMesh.material.opacity = 0.9 * (1 - ft);
-      otherMesh.material.opacity = 0.55 * (1 - ft);
-      combinedMesh.visible = true;
-      combinedMesh.material.opacity = 0.85 * ft;
-    }
-
     if (t >= 1) {
+      // Surfaces have fully slid together — swap to combined
       playerMesh.visible = false;
       otherMesh.visible = false;
+      combinedMesh.visible = true;
       combinedMesh.material.opacity = 0.85;
       enterMarble();
     }
@@ -616,16 +610,16 @@ function animate(now) {
     const t = Math.min(1, (now - phaseStart) / SEPARATE_MS);
     const e = t * t * (3 - 2 * t);
 
-    playerMesh.visible = true;
+    // Swap to individual surfaces immediately at start of separation
+    if (!playerMesh.visible) {
+      playerMesh.visible = true;
+      playerMesh.material.opacity = 0.9;
+      otherMesh.visible = true;
+      otherMesh.material.opacity = 0.55;
+      combinedMesh.visible = false;
+    }
     playerMesh.position.y = -1.2 * e;
-    playerMesh.material.opacity = 0.9 * Math.min(1, e * 2);
-
-    otherMesh.visible = true;
     otherMesh.position.y = 1.4 * e;
-    otherMesh.material.opacity = 0.55 * Math.min(1, e * 2);
-
-    combinedMesh.material.opacity = 0.85 * (1 - e);
-    if (e >= 1) combinedMesh.visible = false;
 
     // Constraint lines follow person surface
     updateConstraintPositions(evalPerson, otherMesh.position.y);
