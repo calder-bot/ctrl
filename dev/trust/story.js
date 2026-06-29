@@ -1,326 +1,265 @@
 /**
- * CTRL — Trust (v2)
+ * CTRL — Trust (v3)
  *
- * Two mechanisms of trust visualized as 3D surfaces:
- * - Player surface (bottom, purple) — what you want
- * - Other person's surface (top, tinted) — what they want
+ * Both trust and don't-trust simulate identically. Surfaces merge,
+ * marble enters from edge, physics settles it. Surfaces separate
+ * to show individual contributions. Bar history tracks your journey.
  *
- * Trust → surfaces merge into combined landscape, marble drops and rolls
- * via gradient descent. Score = how close the marble lands to YOUR minimum.
- *
- * Don't Trust → safe but low score.
- *
- * 3 people × 3 cycles = 9 rounds. Surfaces drift each cycle.
+ * Procedurally generated person surfaces (seeded RNG).
+ * Player surface is fixed (green, 3 wells).
  */
 
 import * as THREE from 'three';
 import { createSurfaceMesh, updateSurfaceMesh } from '../../lib/surface.js';
 import { OrbitController } from '../../lib/camera.js';
 import { depthColorTo } from '../../lib/colors.js';
+import { BallPhysics } from '../../lib/physics.js';
 
-// ─── Constants ────────────────────────────────────────────────────────
+// ─── Seeded RNG (mulberry32) ─────────────────────────────────────────
 
-const TOTAL_ROUNDS = 9;
-const SAFE_SCORE = 10;
-const MARBLE_STEPS = 300;
-const MARBLE_STEP_SIZE = 0.008;
-const MARBLE_MOMENTUM = 0.85;
-const GRADIENT_THRESHOLD = 0.0005;
-const SURFACE_RANGE = [-2, 2];
-const SURFACE_RES = 80;
-const HEIGHT_SCALE = 0.6;
-
-// ─── People ───────────────────────────────────────────────────────────
-
-const PEOPLE = [
-  {
-    name: 'ALIGNED',
-    color: new THREE.Color(0x00bfa5), // teal
-    labelColor: '#00bfa5',
-    // Wells that reinforce player's — trustworthy (~94 avg score)
-    gaussians: [
-      { cx: -0.6, cy: -0.6, depth: -3.0, sigma: 0.8 },
-      { cx: 0.7, cy: -0.2, depth: -2.0, sigma: 0.7 },
-    ]
-  },
-  {
-    name: 'DECEPTIVE',
-    color: new THREE.Color(0xf5b342), // gold
-    labelColor: '#f5b342',
-    // Broad positive bump weakens player wells; strong far attractors
-    // pull marble to wrong places (~69 avg score)
-    gaussians: [
-      { cx: 1.3, cy: 1.3, depth: -6.0, sigma: 0.5 },
-      { cx: -1.0, cy: 0.8, depth: -3.0, sigma: 0.5 },
-      { cx: 0.0, cy: 0.0, depth: 2.5, sigma: 1.8 },
-    ]
-  },
-  {
-    name: 'RELIABLE',
-    color: new THREE.Color(0xff6b8a), // rose
-    labelColor: '#ff6b8a',
-    // Single deep well perfectly aligned with player well #1
-    // Boring but safest (~96 avg score)
-    gaussians: [
-      { cx: -0.5, cy: -0.5, depth: -5.0, sigma: 0.8 },
-    ]
-  }
-];
-
-// Player surface: 3 wells
-const PLAYER_GAUSSIANS = [
-  { cx: -0.5, cy: -0.5, depth: -3.5, sigma: 0.7 },
-  { cx: 0.8, cy: -0.3, depth: -2.5, sigma: 0.8 },
-  { cx: -0.3, cy: 1.0, depth: -2.0, sigma: 0.6 },
-];
-
-const PLAYER_MINIMA = [
-  { x: -0.5, y: -0.5 },
-  { x: 0.8, y: -0.3 },
-  { x: -0.3, y: 1.0 },
-];
-
-// ─── Surface drift per cycle ──────────────────────────────────────────
-
-function makeDrifts() {
-  return [
-    // Cycle 0: no drift
-    PEOPLE.map(p => p.gaussians.map(() => ({ dx: 0, dy: 0 }))),
-    // Cycle 1: slight drift
-    PEOPLE.map(p => p.gaussians.map(() => ({
-      dx: (Math.random() - 0.5) * 0.3,
-      dy: (Math.random() - 0.5) * 0.3,
-    }))),
-    // Cycle 2: more drift
-    PEOPLE.map(p => p.gaussians.map(() => ({
-      dx: (Math.random() - 0.5) * 0.6,
-      dy: (Math.random() - 0.5) * 0.6,
-    }))),
-  ];
+function mulberry32(seed) {
+  return () => {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
 }
 
-// ─── Surface evaluation ───────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────
 
-function evalGaussians(gaussians, x, y, drifts) {
+const RANGE = [-2, 2];
+const RES = 80;
+const H_SCALE = 0.6;
+const BALL_R = 0.1;
+const MAX_TRAIL = 600;
+const MERGE_MS = 900;
+const SEPARATE_MS = 800;
+const POST_MS = 1500;
+const SETTLE_SPEED = 0.05;
+const SETTLE_FRAMES = 60;
+const MARBLE_TIMEOUT = 8;
+const SETTLE_PAUSE = 1.0;
+const BAR_MIN_H = 6;
+const BAR_MAX_H = 56;
+const Z_NORM = 5.0;
+
+// ─── Player surface (fixed, green) ──────────────────────────────────
+
+const PLAYER_G = [
+  { cx: -0.5, cy: -0.5, depth: -3.5, sigma: 0.7 },
+  { cx: 0.8,  cy: -0.3, depth: -2.5, sigma: 0.8 },
+  { cx: -0.3, cy: 1.0,  depth: -2.0, sigma: 0.6 },
+];
+
+function evalG(gs, x, y) {
   let z = 0;
-  for (let i = 0; i < gaussians.length; i++) {
-    const g = gaussians[i];
-    const dx = drifts ? drifts[i].dx : 0;
-    const dy = drifts ? drifts[i].dy : 0;
-    const ex = x - (g.cx + dx);
-    const ey = y - (g.cy + dy);
+  for (const g of gs) {
+    const ex = x - g.cx, ey = y - g.cy;
     z += g.depth * Math.exp(-(ex * ex + ey * ey) / g.sigma);
   }
-  // Gentle boundary to keep the surface from being flat at edges
-  const r2 = x * x + y * y;
-  z += 0.05 * r2;
-  return z;
+  return z + 0.05 * (x * x + y * y);
 }
 
-function evalPlayer(x, y) {
-  return evalGaussians(PLAYER_GAUSSIANS, x, y, null);
+const evalPlayer = (x, y) => evalG(PLAYER_G, x, y);
+
+// Find player's global minimum by grid search
+function findMin(fn) {
+  let mz = Infinity, mx = 0, my = 0;
+  for (let x = -2; x <= 2; x += 0.02)
+    for (let y = -2; y <= 2; y += 0.02) {
+      const z = fn(x, y);
+      if (z < mz) { mz = z; mx = x; my = y; }
+    }
+  return { x: mx, y: my, z: mz };
 }
 
-function evalPerson(personIdx, cycle, drifts, x, y) {
-  return evalGaussians(PEOPLE[personIdx].gaussians, x, y, drifts[cycle][personIdx]);
+const playerMin = findMin(evalPlayer);
+
+// ─── Person surface (procedural) ────────────────────────────────────
+
+let personG = null;
+let personColor = null;
+
+const evalPerson = (x, y) => evalG(personG, x, y);
+const evalCombined = (x, y) => evalPlayer(x, y) + evalPerson(x, y);
+
+function genSurface(rng) {
+  const gs = [], cs = [];
+  for (let i = 0; i < 3; i++) {
+    let cx, cy, ok, n = 0;
+    do {
+      cx = -1.3 + rng() * 2.6;
+      cy = -1.3 + rng() * 2.6;
+      ok = cs.every(c => Math.hypot(cx - c[0], cy - c[1]) >= 0.8);
+    } while (!ok && ++n < 100);
+    cs.push([cx, cy]);
+    gs.push({ cx, cy, depth: -(1.5 + rng() * 4), sigma: 0.5 + rng() * 0.5 });
+  }
+  return gs;
 }
 
-function evalCombined(personIdx, cycle, drifts, x, y) {
-  return evalPlayer(x, y) + evalPerson(personIdx, cycle, drifts, x, y);
+function genColor(rng) {
+  let h;
+  do { h = rng(); } while (h > 0.22 && h < 0.44); // avoid green
+  return new THREE.Color().setHSL(h, 0.65, 0.55);
 }
 
-// ─── Color functions ──────────────────────────────────────────────────
+// ─── Color functions ─────────────────────────────────────────────────
 
-const _tmpColor = new THREE.Color();
-
-function playerColorFn(out, value, min, max) {
-  // Purple-tinted depth gradient
-  const frac = Math.max(0, Math.min(1, (value - min) / (max - min)));
-  const r = (0.15 + frac * 0.20);
-  const g = (0.08 + frac * 0.08);
-  const b = (0.45 - frac * 0.15);
-  out.setRGB(r, g, b);
+function playerCF(out, v, min, max) {
+  const f = Math.max(0, Math.min(1, (v - min) / (max - min)));
+  out.setRGB((20 + f * 80) / 255, (100 + f * 120) / 255, (30 + f * 50) / 255);
   return out;
 }
 
-function personColorFn(baseColor) {
-  return function(out, value, min, max) {
-    const frac = Math.max(0, Math.min(1, (value - min) / (max - min)));
-    out.copy(baseColor);
-    out.multiplyScalar(0.3 + frac * 0.7);
+function personCF(base) {
+  return (out, v, min, max) => {
+    const f = Math.max(0, Math.min(1, (v - min) / (max - min)));
+    out.copy(base).multiplyScalar(0.3 + f * 0.7);
     return out;
   };
 }
 
-function combinedColorFn(out, value, min, max) {
-  return depthColorTo(out, value, min, max);
-}
+const combinedCF = depthColorTo;
 
-// ─── Game state ───────────────────────────────────────────────────────
+// ─── Game state ──────────────────────────────────────────────────────
 
-let currentRound = 0;
-let totalScore = 0;
-let animating = false;
-let personDrifts = makeDrifts();
-let roundScores = [];
-let roundPersonIndices = [];
-let roundTrusted = [];
+const rng = mulberry32(42);
+let round = 0;
+let phase = 'IDLE';
+let phaseStart = 0;
+let choice = null;
+let marbleTime = 0;
+let settled = false;
+let settleTime = 0;
+let settledFrames = 0;
+let trailIdx = 0;
+let finalX = 0, finalY = 0;
+let physics = null;
 
-function getPersonIndex() { return currentRound % 3; }
-function getCycle() { return Math.floor(currentRound / 3); }
-
-// ─── Scene setup ──────────────────────────────────────────────────────
+// ─── Scene ───────────────────────────────────────────────────────────
 
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
-
-const camera = new THREE.PerspectiveCamera(45,
-  window.innerWidth / window.innerHeight, 0.1, 100);
-
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
 renderer.setClearColor(0x000000);
 container.appendChild(renderer.domElement);
 
-// Lighting
 scene.add(new THREE.AmbientLight(0x404060, 0.6));
+const dl = new THREE.DirectionalLight(0xffffff, 0.8);
+dl.position.set(3, 5, 4); scene.add(dl);
+const rl = new THREE.DirectionalLight(0x446644, 0.3);
+rl.position.set(-3, 2, -4); scene.add(rl);
 
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(3, 5, 4);
-scene.add(dirLight);
-
-const rimLight = new THREE.DirectionalLight(0x6644aa, 0.3);
-rimLight.position.set(-3, 2, -4);
-scene.add(rimLight);
-
-// Orbit camera
 const orbit = new OrbitController(camera, renderer.domElement, {
-  radius: 8,
-  radiusMin: 4,
-  radiusMax: 16,
-  defaultPhi: Math.PI / 3.5,
-  phiMin: 0.3,
-  phiMax: 1.5,
-  autoSpeed: 0.12,
-  snapSpeed: 0.04,
+  radius: 8, radiusMin: 4, radiusMax: 16,
+  defaultPhi: Math.PI / 3.5, phiMin: 0.3, phiMax: 1.5,
+  autoSpeed: 0.12, snapSpeed: 0.04,
   target: new THREE.Vector3(0, -0.5, 0),
-  ignoreSelector: '#controls, #end-screen',
+  ignoreSelector: '#controls, #bar-history',
 });
 
-// ─── Create meshes ────────────────────────────────────────────────────
+// ─── Meshes ──────────────────────────────────────────────────────────
 
-// Player surface (bottom)
+personG = genSurface(rng);
+personColor = genColor(rng);
+
 const playerMesh = createSurfaceMesh(evalPlayer, {
-  xRange: SURFACE_RANGE,
-  yRange: SURFACE_RANGE,
-  resolution: SURFACE_RES,
-  heightScale: HEIGHT_SCALE,
-  opacity: 0.9,
-  colorFn: playerColorFn,
+  xRange: RANGE, yRange: RANGE, resolution: RES,
+  heightScale: H_SCALE, opacity: 0.9, colorFn: playerCF,
 });
 playerMesh.position.y = -1.2;
+playerMesh.renderOrder = 0;
 scene.add(playerMesh);
 
-// Other person surface (top)
-const pIdx0 = getPersonIndex();
-const cycle0 = getCycle();
-
-const otherMesh = createSurfaceMesh(
-  (x, y) => evalPerson(pIdx0, cycle0, personDrifts, x, y), {
-    xRange: SURFACE_RANGE,
-    yRange: SURFACE_RANGE,
-    resolution: SURFACE_RES,
-    heightScale: HEIGHT_SCALE,
-    opacity: 0.55,
-    colorFn: personColorFn(PEOPLE[pIdx0].color),
-  }
-);
+const otherMesh = createSurfaceMesh(evalPerson, {
+  xRange: RANGE, yRange: RANGE, resolution: RES,
+  heightScale: H_SCALE, opacity: 0.55, colorFn: personCF(personColor),
+});
 otherMesh.position.y = 1.4;
+otherMesh.renderOrder = 1;
 scene.add(otherMesh);
 
-// Combined surface (hidden)
-const combinedMesh = createSurfaceMesh(
-  (x, y) => evalCombined(pIdx0, cycle0, personDrifts, x, y), {
-    xRange: SURFACE_RANGE,
-    yRange: SURFACE_RANGE,
-    resolution: SURFACE_RES,
-    heightScale: HEIGHT_SCALE,
-    opacity: 0.85,
-    colorFn: combinedColorFn,
-  }
-);
-combinedMesh.position.y = 0;
+const combinedMesh = createSurfaceMesh(evalCombined, {
+  xRange: RANGE, yRange: RANGE, resolution: RES,
+  heightScale: H_SCALE, opacity: 0.85, colorFn: combinedCF,
+});
 combinedMesh.visible = false;
+combinedMesh.renderOrder = 2;
 scene.add(combinedMesh);
 
 // Marble
-const marbleGeo = new THREE.SphereGeometry(0.1, 20, 20);
 const marbleMat = new THREE.MeshPhongMaterial({
-  color: 0xffffff,
-  emissive: 0xff6b8a,
-  emissiveIntensity: 0.6,
-  shininess: 100,
+  color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.4, shininess: 100,
 });
-const marbleMesh = new THREE.Mesh(marbleGeo, marbleMat);
+const marbleMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(BALL_R, 20, 20), marbleMat
+);
 marbleMesh.visible = false;
 scene.add(marbleMesh);
 
-// Marble glow
-const glowGeo = new THREE.SphereGeometry(0.22, 16, 16);
 const glowMat = new THREE.MeshBasicMaterial({
-  color: 0xff6b8a,
-  transparent: true,
-  opacity: 0.15,
+  color: 0xffffff, transparent: true, opacity: 0.15,
 });
-const glowMesh = new THREE.Mesh(glowGeo, glowMat);
-marbleMesh.add(glowMesh);
+marbleMesh.add(new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), glowMat));
+const mLight = new THREE.PointLight(0xffffff, 1.5, 4);
+marbleMesh.add(mLight);
 
-// Marble point light
-const marbleLight = new THREE.PointLight(0xff6b8a, 1.5, 4);
-marbleMesh.add(marbleLight);
-
-// Trail line
+// Trail
+const trailBuf = new Float32Array(MAX_TRAIL * 3);
 const trailGeo = new THREE.BufferGeometry();
-const trailPositions = new Float32Array(MARBLE_STEPS * 3);
-trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailBuf, 3));
 trailGeo.setDrawRange(0, 0);
 const trailMat = new THREE.LineBasicMaterial({
-  color: 0xff6b8a,
-  transparent: true,
-  opacity: 0.4,
+  color: 0xffffff, transparent: true, opacity: 0.3,
 });
 const trailLine = new THREE.Line(trailGeo, trailMat);
 scene.add(trailLine);
 
-// ─── UI helpers ───────────────────────────────────────────────────────
+// Ghost marbles (shown during/after separation)
+const ghostGeo = new THREE.SphereGeometry(BALL_R * 0.8, 16, 16);
+const ghostPMat = new THREE.MeshPhongMaterial({
+  color: 0x4ade80, transparent: true, opacity: 0.7,
+  emissive: 0x4ade80, emissiveIntensity: 0.3,
+});
+const ghostOMat = new THREE.MeshPhongMaterial({
+  color: 0xffffff, transparent: true, opacity: 0.7,
+  emissive: 0xffffff, emissiveIntensity: 0.3,
+});
+const ghostP = new THREE.Mesh(ghostGeo, ghostPMat);
+const ghostO = new THREE.Mesh(ghostGeo.clone(), ghostOMat);
+ghostP.visible = ghostO.visible = false;
+scene.add(ghostP, ghostO);
 
-const scoreEl = document.getElementById('score-value');
+// ─── UI ──────────────────────────────────────────────────────────────
+
 const roundEl = document.getElementById('round-display');
-const personEl = document.getElementById('person-label');
+const btnT = document.getElementById('btn-trust');
+const btnD = document.getElementById('btn-distrust');
+const barBox = document.getElementById('bar-history');
 const flashEl = document.getElementById('result-flash');
 const flashNum = document.getElementById('result-number');
 const flashSub = document.getElementById('result-sub');
-const btnTrust = document.getElementById('btn-trust');
-const btnDistrust = document.getElementById('btn-distrust');
-const endScreen = document.getElementById('end-screen');
-const controlsEl = document.getElementById('controls');
 
-function updateRoundUI() {
-  const pIdx = getPersonIndex();
-  roundEl.textContent = (currentRound + 1) + ' / ' + TOTAL_ROUNDS;
-  personEl.textContent = PEOPLE[pIdx].name;
-  personEl.style.color = PEOPLE[pIdx].labelColor;
-  scoreEl.textContent = totalScore;
+function setButtons(on) {
+  btnT.classList[on ? 'remove' : 'add']('disabled');
+  btnD.classList[on ? 'remove' : 'add']('disabled');
 }
 
-function setButtonsEnabled(enabled) {
-  const method = enabled ? 'remove' : 'add';
-  btnTrust.classList[method]('disabled');
-  btnDistrust.classList[method]('disabled');
-}
+// ─── Round lifecycle ─────────────────────────────────────────────────
 
-function showBothSurfaces() {
+function initRound() {
+  if (round > 0) {
+    personG = genSurface(rng);
+    personColor = genColor(rng);
+    otherMesh.userData._colorFn = personCF(personColor);
+    updateSurfaceMesh(otherMesh, evalPerson);
+  }
+
   playerMesh.visible = true;
   playerMesh.position.y = -1.2;
   playerMesh.material.opacity = 0.9;
@@ -329,275 +268,216 @@ function showBothSurfaces() {
   otherMesh.material.opacity = 0.55;
   combinedMesh.visible = false;
   marbleMesh.visible = false;
-  trailLine.geometry.setDrawRange(0, 0);
-  setButtonsEnabled(true);
+  ghostP.visible = ghostO.visible = false;
+  trailGeo.setDrawRange(0, 0);
+  flashEl.style.opacity = '0';
+
+  roundEl.textContent = round + 1;
+  setButtons(true);
+  phase = 'IDLE';
 }
 
-// ─── Update surfaces for current round ────────────────────────────────
-
-function updateSurfaces() {
-  const pIdx = getPersonIndex();
-  const cycle = getCycle();
-  const personColor = PEOPLE[pIdx].color;
-
-  // Rebuild other mesh with new color function and equation
-  otherMesh.userData._colorFn = personColorFn(personColor);
-  updateSurfaceMesh(otherMesh,
-    (x, y) => evalPerson(pIdx, cycle, personDrifts, x, y));
-
-  // Update combined
-  updateSurfaceMesh(combinedMesh,
-    (x, y) => evalCombined(pIdx, cycle, personDrifts, x, y));
+function onChoice(c) {
+  if (phase !== 'IDLE') return;
+  choice = c;
+  setButtons(false);
+  updateSurfaceMesh(combinedMesh, evalCombined);
+  phase = 'MERGING';
+  phaseStart = performance.now();
 }
 
-// ─── Trust action ─────────────────────────────────────────────────────
+function enterMarble() {
+  phase = 'MARBLE';
+  marbleTime = 0;
+  settled = false;
+  settleTime = 0;
+  settledFrames = 0;
+  trailIdx = 0;
 
-function doTrust() {
-  animating = true;
-  setButtonsEnabled(false);
+  physics = new BallPhysics(evalCombined, {
+    gravity: 30, damping: 7, mass: 1.0, maxDt: 0.03,
+    bounds: [-1.9, 1.9], kickForce: 3,
+  });
 
-  const pIdx = getPersonIndex();
-  const cycle = getCycle();
+  // Spawn from random edge with velocity toward center
+  const edge = Math.floor(rng() * 4);
+  const pos = -1.2 + rng() * 2.4;
+  const spd = 2.5 + rng() * 1.5;
+  const spr = (rng() - 0.5) * 1.5;
 
-  updateSurfaces();
-
-  // Animate surfaces merging
-  const mergeStart = performance.now();
-  const mergeDuration = 900;
-
-  function animateMerge(now) {
-    const t = Math.min(1, (now - mergeStart) / mergeDuration);
-    const ease = t * t * (3 - 2 * t); // smoothstep
-
-    playerMesh.position.y = -1.2 + ease * 1.2;
-    otherMesh.position.y = 1.4 - ease * 1.4;
-    otherMesh.material.opacity = 0.55 * (1 - ease);
-    playerMesh.material.opacity = 0.9 * (1 - ease * 0.5);
-
-    if (t < 1) {
-      requestAnimationFrame(animateMerge);
-    } else {
-      playerMesh.visible = false;
-      otherMesh.visible = false;
-      combinedMesh.visible = true;
-      combinedMesh.position.y = 0;
-      spawnAndRollMarble(pIdx, cycle);
-    }
-  }
-
-  requestAnimationFrame(animateMerge);
-}
-
-// ─── Marble physics ───────────────────────────────────────────────────
-
-function spawnAndRollMarble(pIdx, cycle) {
-  const [rMin, rMax] = SURFACE_RANGE;
-  const range = rMax - rMin;
-
-  // Random start in inner 70% of surface
-  let mx = rMin + 0.15 * range + Math.random() * 0.7 * range;
-  let my = rMin + 0.15 * range + Math.random() * 0.7 * range;
-
-  const path = [];
-  let vx = 0, vy = 0;
-  const eps = 0.01;
-
-  // Gradient descent with momentum
-  for (let step = 0; step < MARBLE_STEPS; step++) {
-    const dzx = (evalCombined(pIdx, cycle, personDrifts, mx + eps, my)
-      - evalCombined(pIdx, cycle, personDrifts, mx - eps, my)) / (2 * eps);
-    const dzy = (evalCombined(pIdx, cycle, personDrifts, mx, my + eps)
-      - evalCombined(pIdx, cycle, personDrifts, mx, my - eps)) / (2 * eps);
-
-    vx = MARBLE_MOMENTUM * vx - MARBLE_STEP_SIZE * dzx;
-    vy = MARBLE_MOMENTUM * vy - MARBLE_STEP_SIZE * dzy;
-
-    mx += vx;
-    my += vy;
-
-    // Clamp to bounds
-    mx = Math.max(rMin + 0.1, Math.min(rMax - 0.1, mx));
-    my = Math.max(rMin + 0.1, Math.min(rMax - 0.1, my));
-
-    const h = evalCombined(pIdx, cycle, personDrifts, mx, my) * HEIGHT_SCALE;
-    path.push({ wx: mx, wy: h + 0.12, wz: my, nx: mx, ny: my });
-
-    const gradMag = Math.sqrt(dzx * dzx + dzy * dzy);
-    if (gradMag < GRADIENT_THRESHOLD && step > 20) break;
-  }
-
-  // Set up trail
-  const trailPos = trailLine.geometry.attributes.position;
-  for (let i = 0; i < path.length && i < MARBLE_STEPS; i++) {
-    trailPos.setXYZ(i, path[i].wx, path[i].wy, path[i].wz);
-  }
-  trailPos.needsUpdate = true;
+  if (edge === 0)      { physics.x = -1.8; physics.y = pos; physics.vx = spd;  physics.vy = spr; }
+  else if (edge === 1) { physics.x = 1.8;  physics.y = pos; physics.vx = -spd; physics.vy = spr; }
+  else if (edge === 2) { physics.x = pos;  physics.y = -1.8; physics.vx = spr; physics.vy = spd; }
+  else                 { physics.x = pos;  physics.y = 1.8;  physics.vx = spr; physics.vy = -spd; }
 
   marbleMesh.visible = true;
 
-  // Animate marble along path
-  const animStart = performance.now();
-  const totalDuration = 2800;
-
-  function animateMarble(now) {
-    const t = Math.min(1, (now - animStart) / totalDuration);
-    const et = 1 - Math.pow(1 - t, 3); // ease out
-    const idx = Math.min(path.length - 1, Math.floor(et * (path.length - 1)));
-    const p = path[idx];
-
-    marbleMesh.position.set(p.wx, p.wy, p.wz);
-    trailLine.geometry.setDrawRange(0, idx + 1);
-
-    if (t < 1) {
-      requestAnimationFrame(animateMarble);
-    } else {
-      // Score: distance from marble's final position to nearest player minimum
-      const finalX = p.nx;
-      const finalY = p.ny;
-
-      let minDist = Infinity;
-      for (const m of PLAYER_MINIMA) {
-        const d = Math.sqrt((finalX - m.x) ** 2 + (finalY - m.y) ** 2);
-        if (d < minDist) minDist = d;
-      }
-
-      // Closer = higher score. Max useful dist ~2.0 on [-2,2] range
-      const score = Math.round(Math.max(0, (1 - minDist / 1.5)) * 100);
-      const clampedScore = Math.max(0, Math.min(100, score));
-
-      roundScores.push(clampedScore);
-      roundPersonIndices.push(pIdx);
-      roundTrusted.push(true);
-      totalScore += clampedScore;
-
-      showResult(clampedScore, true);
-    }
-  }
-
-  requestAnimationFrame(animateMarble);
+  // Color marble by choice
+  const cc = choice === 'trust' ? 0x4ade80 : 0xf87171;
+  marbleMat.emissive.setHex(cc);
+  glowMat.color.setHex(cc);
+  mLight.color.setHex(cc);
+  trailMat.color.setHex(cc);
 }
 
-// ─── Don't trust ──────────────────────────────────────────────────────
+function enterSeparate() {
+  phase = 'SEPARATING';
+  phaseStart = performance.now();
 
-function doDistrust() {
-  animating = true;
-  setButtonsEnabled(false);
+  // Compute Z-distance on player surface
+  const zHere = evalPlayer(finalX, finalY);
+  const zDist = zHere - playerMin.z; // always >= 0
 
-  const pIdx = getPersonIndex();
-  roundScores.push(SAFE_SCORE);
-  roundPersonIndices.push(pIdx);
-  roundTrusted.push(false);
-  totalScore += SAFE_SCORE;
+  // Add bar to history
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const norm = Math.min(1, zDist / Z_NORM);
+  bar.style.height = (BAR_MIN_H + norm * (BAR_MAX_H - BAR_MIN_H)) + 'px';
+  bar.style.backgroundColor = choice === 'trust' ? '#4ade80' : '#f87171';
+  barBox.appendChild(bar);
+  barBox.scrollLeft = barBox.scrollWidth;
 
-  showResult(SAFE_SCORE, false);
-}
-
-// ─── Result display ───────────────────────────────────────────────────
-
-function showResult(score, trusted) {
-  flashNum.textContent = '+' + score;
-  flashSub.textContent = trusted ? '' : 'SAFE';
+  // Result flash
+  flashNum.textContent = zDist.toFixed(1);
+  flashSub.textContent = choice === 'trust' ? 'TRUSTED' : 'PASSED';
   flashEl.style.opacity = '1';
-  scoreEl.textContent = totalScore;
 
-  setTimeout(() => {
-    flashEl.style.opacity = '0';
-    setTimeout(() => {
-      currentRound++;
+  // Prepare ghost marbles
+  ghostP.visible = ghostO.visible = true;
+  ghostOMat.color.copy(personColor);
+  ghostOMat.emissive.copy(personColor);
+  ghostP.userData._sh = evalPlayer(finalX, finalY) * H_SCALE;
+  ghostO.userData._sh = evalPerson(finalX, finalY) * H_SCALE;
 
-      if (currentRound >= TOTAL_ROUNDS) {
-        showEndScreen();
-        return;
-      }
-
-      updateSurfaces();
-      updateRoundUI();
-      showBothSurfaces();
-      animating = false;
-    }, 400);
-  }, 1200);
+  marbleMesh.visible = false;
 }
 
-// ─── End screen ───────────────────────────────────────────────────────
+// ─── Animation loop ─────────────────────────────────────────────────
 
-function showEndScreen() {
-  controlsEl.style.display = 'none';
-  endScreen.style.display = 'flex';
-  document.getElementById('end-total').textContent = totalScore;
-
-  let html = '';
-  for (let p = 0; p < 3; p++) {
-    const person = PEOPLE[p];
-    let personTotal = 0;
-    let trusted = 0;
-    let rounds = 0;
-    for (let r = 0; r < roundScores.length; r++) {
-      if (roundPersonIndices[r] === p) {
-        personTotal += roundScores[r];
-        if (roundTrusted[r]) trusted++;
-        rounds++;
-      }
-    }
-    html += `<div><span class="person-name" style="color:${person.labelColor}">${person.name}</span> &mdash; ${personTotal} <span style="color:#444">(trusted ${trusted}/${rounds})</span></div>`;
-  }
-  document.getElementById('end-breakdown').innerHTML = html;
-  animating = false;
-}
-
-// ─── Restart ──────────────────────────────────────────────────────────
-
-function restart() {
-  currentRound = 0;
-  totalScore = 0;
-  roundScores = [];
-  roundPersonIndices = [];
-  roundTrusted = [];
-  animating = false;
-  personDrifts = makeDrifts();
-
-  endScreen.style.display = 'none';
-  controlsEl.style.display = 'flex';
-
-  updateSurfaces();
-  updateRoundUI();
-  showBothSurfaces();
-}
-
-// ─── Event listeners ──────────────────────────────────────────────────
-
-btnTrust.addEventListener('click', () => {
-  if (animating || currentRound >= TOTAL_ROUNDS) return;
-  doTrust();
-});
-
-btnDistrust.addEventListener('click', () => {
-  if (animating || currentRound >= TOTAL_ROUNDS) return;
-  doDistrust();
-});
-
-document.getElementById('restart-btn').addEventListener('click', restart);
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-// ─── Animation loop ───────────────────────────────────────────────────
-
-let lastTime = performance.now();
+let lastT = performance.now();
 
 function animate(now) {
   requestAnimationFrame(animate);
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
-  lastTime = now;
-
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
   orbit.update(dt);
+
+  // ── MERGING: surfaces slide together vertically ──
+  if (phase === 'MERGING') {
+    const t = Math.min(1, (now - phaseStart) / MERGE_MS);
+    const e = t * t * (3 - 2 * t); // smoothstep
+
+    playerMesh.position.y = -1.2 + e * 1.2;
+    otherMesh.position.y = 1.4 - e * 1.4;
+
+    // Last 30%: crossfade to combined surface
+    if (t > 0.7) {
+      const ft = (t - 0.7) / 0.3;
+      playerMesh.material.opacity = 0.9 * (1 - ft);
+      otherMesh.material.opacity = 0.55 * (1 - ft);
+      combinedMesh.visible = true;
+      combinedMesh.material.opacity = 0.85 * ft;
+    }
+
+    if (t >= 1) {
+      playerMesh.visible = false;
+      otherMesh.visible = false;
+      combinedMesh.material.opacity = 0.85;
+      enterMarble();
+    }
+  }
+
+  // ── MARBLE: real-time physics on combined surface ──
+  if (phase === 'MARBLE') {
+    if (!settled) {
+      physics.step(dt);
+      marbleTime += dt;
+
+      const h = evalCombined(physics.x, physics.y) * H_SCALE;
+      marbleMesh.position.set(physics.x, h + BALL_R, physics.y);
+
+      // Record trail
+      if (trailIdx < MAX_TRAIL) {
+        const tp = trailGeo.attributes.position;
+        tp.setXYZ(trailIdx, physics.x, h + BALL_R * 0.5, physics.y);
+        tp.needsUpdate = true;
+        trailGeo.setDrawRange(0, ++trailIdx);
+      }
+
+      // Settle detection
+      const spd = Math.hypot(physics.vx, physics.vy);
+      if (spd < SETTLE_SPEED) settledFrames++;
+      else settledFrames = 0;
+
+      if (settledFrames >= SETTLE_FRAMES || marbleTime > MARBLE_TIMEOUT) {
+        settled = true;
+        settleTime = now;
+        finalX = physics.x;
+        finalY = physics.y;
+      }
+    } else {
+      // Pause with marble at rest before scoring
+      if ((now - settleTime) / 1000 > SETTLE_PAUSE) {
+        enterSeparate();
+      }
+    }
+  }
+
+  // ── SEPARATING: surfaces pull apart, ghost marbles track ──
+  if (phase === 'SEPARATING') {
+    const t = Math.min(1, (now - phaseStart) / SEPARATE_MS);
+    const e = t * t * (3 - 2 * t);
+
+    playerMesh.visible = true;
+    playerMesh.position.y = -1.2 * e;
+    playerMesh.material.opacity = 0.9 * Math.min(1, e * 2);
+
+    otherMesh.visible = true;
+    otherMesh.position.y = 1.4 * e;
+    otherMesh.material.opacity = 0.55 * Math.min(1, e * 2);
+
+    combinedMesh.material.opacity = 0.85 * (1 - e);
+    if (e >= 1) combinedMesh.visible = false;
+
+    // Ghost marbles sit on their respective surfaces
+    ghostP.position.set(finalX, playerMesh.position.y + ghostP.userData._sh + BALL_R, finalY);
+    ghostO.position.set(finalX, otherMesh.position.y + ghostO.userData._sh + BALL_R, finalY);
+
+    if (t >= 1) {
+      combinedMesh.visible = false;
+      phase = 'POST';
+      phaseStart = now;
+    }
+  }
+
+  // ── POST: hold result view, then next round ──
+  if (phase === 'POST') {
+    // Keep ghost marbles positioned
+    ghostP.position.set(finalX, playerMesh.position.y + ghostP.userData._sh + BALL_R, finalY);
+    ghostO.position.set(finalX, otherMesh.position.y + ghostO.userData._sh + BALL_R, finalY);
+
+    if (now - phaseStart > POST_MS) {
+      flashEl.style.opacity = '0';
+      phase = 'TRANSITION';
+      setTimeout(() => { round++; initRound(); }, 300);
+    }
+  }
+
   renderer.render(scene, camera);
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────
+// ─── Events ──────────────────────────────────────────────────────────
 
-updateRoundUI();
-showBothSurfaces();
+btnT.addEventListener('click', () => onChoice('trust'));
+btnD.addEventListener('click', () => onChoice('distrust'));
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ─── Init ────────────────────────────────────────────────────────────
+
+initRound();
 requestAnimationFrame(animate);
